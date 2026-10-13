@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Salary & Payroll Management Portal</title>
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Chart.js & SheetJS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- ExcelJS -->
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+                            400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+                            800: '#075985', 900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Fix: Global Month and Year Dropdown Text Visibility */
+        #global-month-select option,
+        #global-year-select option {
+            background-color: #1e293b !important;
+            color: #ffffff !important;
+            font-weight: 600;
+            padding: 8px;
+        }
+
+        /* High-Contrast Prominent Scrollbars */
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 12px;
+            width: 12px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #cbd5e1;
+            border-radius: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #0284c7;
+            border-radius: 6px;
+            border: 2px solid #cbd5e1;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #0369a1;
+        }
+
+        .custom-scrollbar-teal::-webkit-scrollbar {
+            height: 14px;
+            width: 12px;
+        }
+        .custom-scrollbar-teal::-webkit-scrollbar-track {
+            background: #cbd5e1;
+            border-radius: 8px;
+        }
+        .custom-scrollbar-teal::-webkit-scrollbar-thumb {
+            background: #0d9488;
+            border-radius: 8px;
+            border: 2px solid #cbd5e1;
+        }
+        .custom-scrollbar-teal::-webkit-scrollbar-thumb:hover {
+            background: #0f766e;
+        }
+
+        /* Sticky Table Headers and Footers */
+        #salary-data-table-container thead,
+        #master-table-container thead,
+        #salary-sheet-table-container thead,
+        #biometric-table-container thead,
+        #salary-sheet-calc-table-container thead {
+            position: sticky;
+            top: 0;
+            z-index: 25;
+        }
+
+        #salary-data-table-container tfoot,
+        #master-table-container tfoot,
+        #salary-sheet-table-container tfoot,
+        #biometric-table-container tfoot,
+        #salary-sheet-calc-table-container tfoot {
+            position: sticky;
+            bottom: 0;
+            z-index: 25;
+        }
+
+        @media print {
+            .no-print { display: none !important; }
+            .print-only { display: inline-block !important; }
+            body { background: white !important; }
+            main { padding: 0 !important; }
+            #salary-sheet-table-container,
+            #salary-sheet-calc-table-container { max-height: none !important; overflow: visible !important; }
+        }
+        @media screen {
+            .print-only { display: none !important; }
+        }
+    </style>
+</head>
+<body class="h-full flex font-sans text-slate-800 antialiased overflow-hidden">
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none no-print"></div>
+
+    <!-- Backdrop -->
+    <div id="sidebar-backdrop" onclick="closeSidebar()" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 hidden transition-opacity no-print"></div>
+
+    <!-- Left Slim Icon Rail -->
+    <aside class="w-14 bg-slate-900 border-r border-slate-800 flex flex-col justify-between items-center py-0 z-30 shrink-0 no-print select-none">
+        <div class="w-full flex flex-col items-center">
+            <button onclick="toggleSidebar()" class="w-14 h-12 text-slate-400 hover:text-white hover:bg-slate-800/80 flex items-center justify-center transition border-b border-slate-800/60" title="Toggle Navigation Menu">
+                <i class="fa-solid fa-bars text-base"></i>
+            </button>
+            <div class="w-full py-2 space-y-1.5 flex flex-col items-center">
+                <button id="rail-btn-dashboard" onclick="switchTab('dashboard')" class="w-10 h-10 rounded-xl flex items-center justify-center text-sky-400 bg-slate-800 transition" title="Dashboard">
+                    <i class="fa-solid fa-house text-sm"></i>
+                </button>
+                <button id="rail-btn-master" onclick="openMasterDrawer()" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-indigo-400 hover:bg-slate-800 transition" title="Master Data">
+                    <i class="fa-solid fa-users-gear text-sm"></i>
+                </button>
+                <button id="rail-btn-salary-data" onclick="openSalaryDataDrawer()" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-teal-400 hover:bg-slate-800 transition" title="Salary Data">
+                    <i class="fa-solid fa-money-check-dollar text-sm"></i>
+                </button>
+                <!-- Salary Sheet Tab (Right below Salary Data) -->
+                <button id="rail-btn-salary-sheet-calc" onclick="switchTab('salary-sheet-calc')" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition" title="Salary Sheet (Master Deduction Sheet)">
+                    <i class="fa-solid fa-file-invoice-dollar text-sm"></i>
+                </button>
+                <button id="rail-btn-salary-sheet" onclick="switchTab('salary-sheet')" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition" title="Final Salary Sheet">
+                    <i class="fa-solid fa-table-list text-sm"></i>
+                </button>
+                <button id="rail-btn-biometric" onclick="switchTab('biometric')" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:bg-slate-800 transition" title="Biometric Data">
+                    <i class="fa-solid fa-fingerprint text-sm"></i>
+                </button>
+                <button id="rail-btn-rules-setup" onclick="switchTab('rules-setup')" class="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-amber-400 hover:bg-slate-800 transition" title="Rules & Setup">
+                    <i class="fa-solid fa-sliders text-sm"></i>
+                </button>
+            </div>
+        </div>
+        <div class="pb-3">
+            <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20" title="Connected to Central DB"></div>
+        </div>
+    </aside>
+
+    <!-- Collapsible Sidebar Drawer with ERP Accordion Submenus -->
+    <aside id="sidebar-drawer" class="fixed top-0 left-0 bottom-0 w-72 bg-slate-900 text-white z-50 transform -translate-x-full transition-transform duration-300 ease-in-out flex flex-col justify-between shadow-2xl border-r border-slate-800 no-print">
+        <div class="overflow-y-auto no-scrollbar">
+            <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-blue-600 flex items-center justify-center text-white text-lg font-bold">
+                        <i class="fa-solid fa-file-excel"></i>
+                    </div>
+                    <div>
+                        <h2 class="font-bold text-sm leading-tight">Payroll Portal</h2>
+                        <p class="text-[10px] text-slate-400">Navigation Menu</p>
+                    </div>
+                </div>
+                <button onclick="closeSidebar()" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Navigation Links -->
+            <nav class="p-4 space-y-2 text-xs font-semibold">
+                <p class="px-3 py-1 text-[10px] uppercase font-bold text-slate-500 tracking-wider">Main Views</p>
+                
+                <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 bg-brand-600 text-white">
+                    <i class="fa-solid fa-chart-pie text-base text-sky-300"></i>
+                    <span class="text-sm font-bold">Dashboard View</span>
+                </button>
+
+                <!-- 1. Master Data Dropdown Accordion -->
+                <div class="space-y-1">
+                    <button id="tab-btn-master" onclick="toggleMasterMenu()" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer">
+                        <i class="fa-solid fa-users-gear text-base text-indigo-400"></i>
+                        <span class="text-sm font-bold">Master Data</span>
+                    </button>
+
+                    <div id="master-submenu" class="hidden pl-8 pr-2 py-1 space-y-1 bg-slate-950/40 rounded-xl border border-slate-800/60">
+                        <button onclick="navigateToMasterSubTab('emp')" id="subnav-emp" class="w-full text-left py-2 px-3 rounded-lg text-xs font-semibold text-sky-400 hover:text-sky-300 hover:bg-slate-800 flex items-center gap-2.5 transition">
+                            <i class="fa-regular fa-address-card text-xs"></i> Employees Master
+                        </button>
+                        <button onclick="navigateToMasterSubTab('salary')" id="subnav-salary" class="w-full text-left py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2.5 transition">
+                            <i class="fa-solid fa-calculator text-xs"></i> Salary Master
+                        </button>
+                        <button onclick="navigateToMasterSubTab('bank')" id="subnav-bank" class="w-full text-left py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2.5 transition">
+                            <i class="fa-solid fa-building-columns text-xs"></i> Bank Details
+                        </button>
+                        <button onclick="navigateToMasterSubTab('salary2')" id="subnav-salary2" class="w-full text-left py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2.5 transition">
+                            <i class="fa-solid fa-file-invoice-dollar text-xs"></i> Salary Master 2
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Salary Data Dropdown Accordion -->
+                <div class="space-y-1">
+                    <button id="tab-btn-salary-data" onclick="toggleSalaryDataMenu()" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer">
+                        <i class="fa-solid fa-money-check-dollar text-base text-teal-400"></i>
+                        <span class="text-sm font-bold">Salary Data</span>
+                    </button>
+
+                    <div id="salary-data-submenu" class="hidden pl-7 pr-2 py-1 space-y-0.5 bg-slate-950/40 rounded-xl border border-slate-800/60">
+                        <button onclick="navigateToSalaryDataSubTab('basic_da')" id="subsal-basic_da" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-teal-400 hover:text-teal-300 hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-teal-400"></i> Basic +DA
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('hra')" id="subsal-hra" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> HRA
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('spl_allow')" id="subsal-spl_allow" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> Special Allow
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('city_allow')" id="subsal-city_allow" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> City Allow
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('deduct_short')" id="subsal-deduct_short" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> Deduction For Short Time
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('ot_arrear')" id="subsal-ot_arrear" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> Overtime / Arrear
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('penalty')" id="subsal-penalty" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> Penalty For Uniform & Late Entry
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('advance')" id="subsal-advance" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> Advance
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('pf')" id="subsal-pf" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> PF
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('esi')" id="subsal-esi" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> ESI
+                        </button>
+                        <button onclick="navigateToSalaryDataSubTab('epf')" id="subsal-epf" class="w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition">
+                            <i class="fa-regular fa-circle-dot text-[8px] text-slate-500"></i> EPF
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3. NEW: Salary Sheet Tab (Placed right below Salary Data) -->
+                <button id="tab-btn-salary-sheet-calc" onclick="switchTab('salary-sheet-calc')" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800">
+                    <i class="fa-solid fa-file-invoice-dollar text-base text-sky-400"></i>
+                    <span class="text-sm font-bold">Salary Sheet</span>
+                </button>
+
+                <!-- 4. Final Salary Sheet Tab -->
+                <button id="tab-btn-salary-sheet" onclick="switchTab('salary-sheet')" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800">
+                    <i class="fa-solid fa-table-list text-base text-emerald-400"></i>
+                    <span class="text-sm font-bold">Final Salary Sheet</span>
+                </button>
+
+                <!-- 5. Biometric Attendance Tab -->
+                <button id="tab-btn-biometric" onclick="switchTab('biometric')" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800">
+                    <i class="fa-solid fa-fingerprint text-base text-cyan-400"></i>
+                    <span class="text-sm font-bold">Biometric Data</span>
+                </button>
+
+                <!-- 6. Rules & Setup Tab -->
+                <button id="tab-btn-rules-setup" onclick="switchTab('rules-setup')" class="w-full px-4 py-3 rounded-xl transition flex items-center gap-3 text-slate-400 hover:text-white hover:bg-slate-800">
+                    <i class="fa-solid fa-sliders text-base text-amber-400"></i>
+                    <span class="text-sm font-bold">Rules & Setup</span>
+                </button>
+            </nav>
+        </div>
+
+        <div class="p-4 border-t border-slate-800 text-[11px] text-slate-400">
+            <div class="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
+                <p class="font-semibold text-slate-300 flex items-center gap-1.5 mb-1">
+                    <i class="fa-solid fa-shield-halved text-emerald-400"></i> Central Sync Active
+                </p>
+                <p class="text-[10px] text-slate-400">Multi-session live database sync running.</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        <!-- Top Header Navigation -->
+        <header class="bg-slate-900 text-white border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between no-print shadow-md gap-4 shrink-0">
+            <div class="flex items-center gap-3.5">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-blue-600 flex items-center justify-center text-white text-xl font-bold shadow-lg shadow-sky-500/30 shrink-0">
+                    <i class="fa-solid fa-building-user"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="font-extrabold text-base md:text-lg text-white" id="portal-company-name">PRANAV CREATION PRIVATE LIMITED</h1>
+                        <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] px-2 py-0.5 rounded-full font-semibold hidden lg:inline-block">Live Synced DB</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400">Enterprise Salary Sheet & Multi-User Payroll Management</p>
+                </div>
+            </div>
+
+            <!-- Global Period Controls -->
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-semibold shadow-inner">
+                    <i class="fa-solid fa-calendar-days text-sky-400"></i>
+                    <select id="global-month-select" onchange="onPeriodChange()" class="bg-slate-800 text-sm font-bold text-white focus:outline-none cursor-pointer"></select>
+                    <select id="global-year-select" onchange="onPeriodChange()" class="bg-slate-800 text-sm font-bold text-white focus:outline-none cursor-pointer"></select>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 overflow-y-auto p-6 space-y-5">
+            <!-- TAB 1: DASHBOARD -->
+            <section id="view-dashboard" class="space-y-6 no-print">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Active Employees</p>
+                            <h3 id="dash-emp-count" class="text-3xl font-extrabold text-slate-800 mt-1">0</h3>
+                            <p class="text-[11px] text-emerald-600 font-semibold mt-1">Synced with Central DB</p>
+                        </div>
+                        <div class="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-users"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Gross Payroll</p>
+                            <h3 id="dash-gross-salary" class="text-3xl font-extrabold text-emerald-600 mt-1">₹0</h3>
+                        </div>
+                        <div class="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-indian-rupee-sign"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Statutory Deductions</p>
+                            <h3 id="dash-total-deductions" class="text-3xl font-extrabold text-rose-600 mt-1">₹0</h3>
+                        </div>
+                        <div class="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-hand-holding-dollar"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Net Disbursement</p>
+                            <h3 id="dash-net-payable" class="text-3xl font-extrabold text-brand-600 mt-1">₹0</h3>
+                        </div>
+                        <div class="w-12 h-12 rounded-2xl bg-brand-50 text-brand-600 flex items-center justify-center text-xl font-bold">
+                            <i class="fa-solid fa-money-bill-wave"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm lg:col-span-2">
+                        <h3 class="font-bold text-slate-800 text-sm mb-4"><i class="fa-solid fa-chart-column text-sky-500 mr-2"></i>Pay Comparison</h3>
+                        <div class="h-64"><canvas id="payrollBarChart"></canvas></div>
+                    </div>
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <h3 class="font-bold text-slate-800 text-sm mb-4"><i class="fa-solid fa-chart-pie text-rose-500 mr-2"></i>Deductions Split</h3>
+                        <div class="h-64 flex items-center justify-center"><canvas id="deductionsPieChart"></canvas></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: MASTER DATA -->
+            <section id="view-master" class="space-y-6 hidden no-print">
+                <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div>
+                        <h2 class="font-extrabold text-slate-800 text-lg flex items-center gap-2">
+                            <i class="fa-solid fa-users-gear text-indigo-600"></i>
+                            <span id="master-view-title">Employees Master</span>
+                        </h2>
+                        <p class="text-xs text-slate-500" id="master-view-subtitle">Manage official employee directory and master records.</p>
+                    </div>
+
+                    <div class="flex items-center gap-2.5 flex-wrap">
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="master-search" oninput="renderMasterTable()" placeholder="Search in Master..." class="w-56 md:w-64 pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <div class="relative">
+                            <button id="btn-master-options" onclick="toggleMasterOptionsDropdown(event)" class="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition flex items-center gap-2 border border-slate-700 shadow-sm cursor-pointer">
+                                <i class="fa-solid fa-sliders text-amber-400"></i>
+                                <span>Options</span>
+                                <i id="options-chevron" class="fa-solid fa-chevron-down text-[10px] text-slate-400 transition-transform"></i>
+                            </button>
+
+                            <div id="master-options-dropdown" class="hidden absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200 py-2 z-40 text-xs">
+                                <button onclick="triggerExcelImport()" class="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 text-slate-700 font-bold transition">
+                                    <div class="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                                        <i class="fa-solid fa-file-import text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs text-slate-800 font-bold leading-tight">Import</p>
+                                        <p class="text-[10px] text-slate-400 font-normal">Bulk Upload from Excel</p>
+                                    </div>
+                                </button>
+                                
+                                <div class="border-t border-slate-100 my-1"></div>
+
+                                <button onclick="downloadContextualTemplate()" class="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 text-slate-700 font-bold transition">
+                                    <div class="w-6 h-6 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center">
+                                        <i class="fa-solid fa-file-arrow-down text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs text-slate-800 font-bold leading-tight">Template</p>
+                                        <p class="text-[10px] text-slate-400 font-normal">With Active Fields & Styling</p>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <input type="file" id="excel-import-input" accept=".xlsx, .xls" class="hidden" onchange="handleExcelImport(event)">
+
+                        <!-- Pending Employees from Salary Master 2 -->
+                        <button id="btn-pending-employees" onclick="togglePendingEmployeesView()" class="hidden bg-amber-500 hover:bg-amber-600 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition items-center gap-1.5 shadow-sm" title="Review employees saved from Salary Master 2">
+                            <i class="fa-solid fa-user-clock"></i>
+                            <span id="pending-employees-label">Pending Employees (0)</span>
+                        </button>
+
+                        <!-- Bulk-edit selected Salary Master amounts only -->
+                        <button id="btn-salary-bulk-edit" onclick="openBulkSalaryEditModal()" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition items-center gap-1.5 shadow-sm" title="Bulk edit selected Salary Master amounts">
+                            <i class="fa-solid fa-money-bill-trend-up"></i> Bulk Edit Salary
+                        </button>
+
+                        <!-- Bulk Delete Button (Appears dynamically when 1+ records are selected) -->
+                        <button id="btn-master-bulk-delete" onclick="bulkDeleteEmployees()" class="hidden bg-rose-600 hover:bg-rose-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm shadow-rose-600/30 cursor-pointer" title="Delete selected records in bulk">
+                            <i class="fa-solid fa-trash-can"></i>
+                            <span><span id="master-selected-label">Delete Selected</span> (<span id="master-selected-count">0</span>)</span>
+                        </button>
+
+                        <button id="btn-master-add-employee" onclick="openEmployeeModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm">
+                            <i class="fa-solid fa-user-plus"></i> Add Employee
+                        </button>
+
+                        <button id="btn-master-add-salary2" onclick="openSalaryMaster2Modal()" class="hidden bg-teal-600 hover:bg-teal-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition items-center gap-1.5 shadow-sm">
+                            <i class="fa-solid fa-user-plus"></i> Add Salary Master 2
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden relative">
+                    <div id="master-table-container" class="overflow-x-auto overflow-y-auto max-w-full max-h-[calc(100vh-235px)] custom-scrollbar">
+                        <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                            <thead id="master-thead" class="bg-slate-900 text-white font-semibold uppercase text-[11px] sticky top-0 z-20 shadow-sm"></thead>
+                            <tbody id="master-tbody" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                            <tfoot id="master-tfoot" class="hidden bg-slate-100 font-bold border-t border-slate-300 text-xs sticky bottom-0 z-20 shadow-sm"></tfoot>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: SALARY DATA VIEW -->
+            <section id="view-salary-data" class="space-y-4 hidden no-print">
+                <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-teal-50 border border-teal-200 text-teal-600 flex items-center justify-center text-lg font-bold shadow-sm shrink-0">
+                            <i class="fa-solid fa-table-cells"></i>
+                        </div>
+                        <div>
+                            <h2 class="font-extrabold text-slate-800 text-base flex items-center gap-2">
+                                <span id="salary-data-title">Basic +DA Matrix</span>
+                            </h2>
+                            <p class="text-[11px] text-slate-500" id="salary-data-subtitle">Columns strictly show months with recorded biometric data.</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-2.5 flex-wrap">
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="salary-data-search" oninput="renderSalaryDataTable()" placeholder="Search staff..." class="w-48 pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-teal-500">
+                        </div>
+
+                        <button onclick="exportSalaryMatrixToExcel()" class="bg-teal-600 hover:bg-teal-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm cursor-pointer">
+                            <i class="fa-solid fa-file-excel"></i> Export Sheet
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div id="salary-data-table-container" class="overflow-x-auto overflow-y-auto max-w-full max-h-[calc(100vh-235px)] custom-scrollbar-teal">
+                        <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                            <thead id="salary-data-thead" class="bg-slate-900 text-white font-semibold uppercase text-[11px] sticky top-0 z-20 shadow-sm"></thead>
+                            <tbody id="salary-data-tbody" class="divide-y divide-slate-200 text-slate-800"></tbody>
+                            <tfoot id="salary-data-tfoot" class="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs sticky bottom-0 z-20 shadow-sm"></tfoot>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: NEW SALARY SHEET (Detail of Deduction From Salary / Pranav Creation Master Sheet) -->
+            <section id="view-salary-sheet-calc" class="space-y-4 hidden no-print">
+                <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-sky-50 border border-sky-200 text-sky-600 flex items-center justify-center text-lg font-bold shadow-sm shrink-0">
+                            <i class="fa-solid fa-file-invoice-dollar"></i>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h2 id="calc-sheet-title" class="font-extrabold text-slate-800 text-base md:text-lg uppercase">DETAIL OF DEDUCTION FROM SALARY</h2>
+                                <span id="calc-sheet-badge" class="bg-sky-100 text-sky-800 border border-sky-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full">Active Month</span>
+                            </div>
+                            <p class="text-xs text-slate-500">Working Hours, Leaves, Short Time, Overtime & Net Deduction Summary</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="calc-sheet-search" oninput="renderSalarySheetCalc()" placeholder="Search employee..." class="w-48 pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-sky-500 shadow-sm">
+                        </div>
+
+                        <!-- 1-Click Master Styled Excel Export matching SALARY_SHEET_SEPTEMBER_2026_FINAL_CLEAN.xlsx -->
+                        <button onclick="exportPranavMasterSalarySheet()" class="bg-sky-600 hover:bg-sky-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-2 shadow-sm shadow-sky-600/30 cursor-pointer" title="Export exact Excel sheet with MAIN SHEET and individual Employee tabs">
+                            <i class="fa-solid fa-file-excel text-emerald-300"></i>
+                            <span>Export Styled Excel (With Employee Tabs)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Salary Sheet Calculation Table Container -->
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div id="salary-sheet-calc-table-container" class="overflow-x-auto overflow-y-auto max-w-full max-h-[calc(100vh-235px)] custom-scrollbar">
+                        <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                            <thead class="bg-slate-900 text-white font-semibold uppercase text-[11px] sticky top-0 z-20 shadow-md">
+                                <tr>
+                                    <th class="p-2.5 text-center border-r border-slate-700 w-12 sticky left-0 bg-slate-900 z-30">ORG Code</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 w-16 sticky left-12 bg-slate-900 z-30">Payroll Code</th>
+                                    <th class="p-2.5 border-r border-slate-700 min-w-[200px] sticky left-28 bg-slate-900 z-30">Name of employee</th>
+                                    <th class="p-2.5 border-r border-slate-700 min-w-[130px]">Designation</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[80px]">Days In Month</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[85px] text-rose-300 font-bold">Leaves Taken</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[85px] text-emerald-300 font-bold">Attendance</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[95px] font-mono">Total Hours</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[110px] font-mono">Working Hours</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[95px] font-mono text-rose-300">Short Time</th>
+                                    <th class="p-2.5 text-center border-r border-slate-700 min-w-[95px] font-mono text-teal-300">Overtime</th>
+                                    <th class="p-2.5 text-right border-r border-slate-700 min-w-[100px] font-bold">Amount</th>
+                                    <th class="p-2.5 text-right border-r border-slate-700 min-w-[110px] text-rose-400 font-bold bg-rose-950/40">Short Deduction</th>
+                                    <th class="p-2.5 text-right border-r border-slate-700 min-w-[100px] text-teal-400 font-bold bg-teal-950/40">Overtime</th>
+                                    <th class="p-2.5 text-center min-w-[120px]">Remarks</th>
+                                </tr>
+                            </thead>
+                            <tbody id="salary-sheet-calc-tbody" class="divide-y divide-slate-200 text-slate-800"></tbody>
+                            <tfoot id="salary-sheet-calc-tfoot" class="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs sticky bottom-0 z-20 shadow-md"></tfoot>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: FINAL SALARY SHEET (Statutory Register) -->
+            <section id="view-salary-sheet" class="space-y-4 hidden">
+                <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4 no-print">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center text-lg font-bold shadow-sm shrink-0">
+                            <i class="fa-solid fa-file-invoice-dollar"></i>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h2 id="sheet-title-text" class="font-extrabold text-slate-800 text-base md:text-lg uppercase">FINAL SALARY SHEET</h2>
+                                <span id="sheet-period-badge" class="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">31 Days</span>
+                            </div>
+                            <p class="text-xs text-slate-500">Statutory Monthly Wages, Earned Allowances & Disbursement Register</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="sheet-search" oninput="renderSalarySheet()" placeholder="Search staff in sheet..." class="w-56 md:w-64 pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 shadow-sm">
+                        </div>
+
+                        <button onclick="exportToExcel()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 cursor-pointer">
+                            <i class="fa-solid fa-file-excel"></i> Export Excel
+                        </button>
+                        
+                        <button onclick="window.print()" class="bg-brand-600 hover:bg-brand-500 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm shadow-brand-600/20 cursor-pointer">
+                            <i class="fa-solid fa-print"></i> Print
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden print-container">
+                    <div id="salary-sheet-table-container" class="overflow-x-auto overflow-y-auto max-w-full max-h-[calc(100vh-235px)] custom-scrollbar">
+                        <table id="final-salary-table" class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                            <thead class="bg-slate-900 text-white font-semibold uppercase text-[11px] sticky top-0 z-20 shadow-md">
+                                <tr class="bg-slate-900 border-b border-slate-700">
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 sticky left-0 bg-slate-900 z-30">Sr. No.</th>
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 sticky left-12 bg-slate-900 z-30">Emp Code</th>
+                                    <th rowspan="2" class="p-2.5 border-r border-slate-700 min-w-[190px] sticky left-32 bg-slate-900 z-30">Name of employee</th>
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 min-w-[120px]">ESIC IP NUMBER</th>
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 min-w-[120px]">EPF UAN</th>
+                                    
+                                    <th colspan="5" class="p-2 text-center border-r border-slate-700 bg-slate-800 text-sky-200 tracking-wider">Gross Amounts of wages</th>
+                                    
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 min-w-[85px]">No. of days worked done</th>
+                                    
+                                    <th colspan="5" class="p-2 text-center border-r border-slate-700 bg-emerald-950 text-emerald-200 tracking-wider">Amount Earned</th>
+                                    
+                                    <th rowspan="2" class="p-2.5 text-right border-r border-slate-700 min-w-[120px]">Deduction For Short Time</th>
+                                    <th rowspan="2" class="p-2.5 text-right border-r border-slate-700 min-w-[110px]">Overtime / Arrear</th>
+                                    <th rowspan="2" class="p-2.5 text-right border-r border-slate-700 min-w-[140px]">Penalty For Uniform & Late Entry</th>
+                                    
+                                    <th rowspan="2" class="p-2.5 text-right border-r border-slate-700 min-w-[110px] bg-teal-950 text-teal-200 font-bold">Total Payable</th>
+                                    
+                                    <th colspan="3" class="p-2 text-center border-r border-slate-700 bg-rose-950 text-rose-200 tracking-wider">Deduction, if any</th>
+                                    
+                                    <th rowspan="2" class="p-2.5 text-right border-r border-slate-700 min-w-[120px] bg-brand-950 text-sky-200 font-extrabold">Net amount paid</th>
+                                    <th rowspan="2" class="p-2.5 text-center border-r border-slate-700 min-w-[160px]">Signature/ thumb impression of workman</th>
+                                    <th rowspan="2" class="p-2.5 text-center no-print min-w-[80px]">Actions</th>
+                                </tr>
+
+                                <tr class="bg-slate-800 text-[10px] text-slate-300 border-b border-slate-700">
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px]">Basic +DA</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px]">HRA</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px]">Special Allow</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px]">City Allow</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px] bg-slate-700/80 text-white font-bold">Total</th>
+
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px]">Basic +DA</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px]">HRA</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px]">Special Allow</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px]">City Allow</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[85px] bg-emerald-900/60 text-emerald-300 font-bold">Total</th>
+
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[80px] text-rose-300">Advance</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px] text-rose-300">PF</th>
+                                    <th class="p-2 text-right border-r border-slate-700 min-w-[75px] text-rose-300">ESI</th>
+                                </tr>
+                            </thead>
+                            <tbody id="salary-sheet-tbody" class="divide-y divide-slate-200 text-slate-800"></tbody>
+                            <tfoot id="salary-sheet-tfoot" class="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs sticky bottom-0 z-20 shadow-md"></tfoot>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 6: BIOMETRIC DATA MODULE -->
+            <section id="view-biometric" class="space-y-4 hidden no-print">
+                <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-cyan-50 border border-cyan-200 text-cyan-600 flex items-center justify-center text-lg font-bold shadow-sm shrink-0">
+                            <i class="fa-solid fa-fingerprint"></i>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h2 class="font-extrabold text-slate-800 text-base md:text-lg">BIOMETRIC ATTENDANCE MODULE</h2>
+                                <span id="bio-active-month-badge" class="bg-cyan-100 text-cyan-800 border border-cyan-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full">Active Month</span>
+                            </div>
+                            <p class="text-xs text-slate-500">Machine Attendance Logs, Overtime Tracking & Shift Punch Analytics</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold">
+                            <span class="text-slate-600">Period:</span>
+                            <select id="bio-month-filter" onchange="onBiometricMonthChange(this.value)" class="bg-transparent font-bold text-slate-800 focus:outline-none cursor-pointer"></select>
+                        </div>
+
+                        <div class="relative">
+                            <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                            <input type="text" id="bio-search" oninput="renderBiometricTable()" placeholder="Search employee..." class="w-44 pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-cyan-500">
+                        </div>
+
+                        <input type="file" id="bio-file-input" accept=".xlsx, .xls" class="hidden" onchange="handleBiometricFileSelect(event)">
+
+                        <button onclick="triggerBiometricUpload()" class="bg-cyan-600 hover:bg-cyan-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm cursor-pointer">
+                            <i class="fa-solid fa-file-arrow-up"></i> Insert Biometric File
+                        </button>
+
+                        <button onclick="deleteActiveBiometricMonth()" class="bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 border border-rose-200 cursor-pointer" title="Remove Active Month Record">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+
+                        <button onclick="exportBiometricSummaryExcel()" class="bg-slate-800 hover:bg-slate-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 border border-slate-700 cursor-pointer">
+                            <i class="fa-solid fa-file-excel text-emerald-400"></i> Export
+                        </button>
+                    </div>
+                </div>
+
+                <!-- KPI Metric Cards for Active Month -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Staff Count</p>
+                            <h3 id="bio-kpi-count" class="text-2xl font-black text-slate-800 mt-0.5">0</h3>
+                            <p class="text-[10px] text-cyan-600 font-semibold mt-0.5">Biometric Machine Synced</p>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center text-lg"><i class="fa-solid fa-users"></i></div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Total Present Days</p>
+                            <h3 id="bio-kpi-present" class="text-2xl font-black text-emerald-600 mt-0.5">0</h3>
+                            <p class="text-[10px] text-slate-400 mt-0.5">Across All Shifts</p>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-lg"><i class="fa-solid fa-calendar-check"></i></div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Total Absent Days</p>
+                            <h3 id="bio-kpi-absent" class="text-2xl font-black text-rose-600 mt-0.5">0</h3>
+                            <p class="text-[10px] text-slate-400 mt-0.5">LWP / Unexcused</p>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-lg"><i class="fa-solid fa-calendar-xmark"></i></div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <p class="text-xs font-medium text-slate-500">Average Paid Days</p>
+                            <h3 id="bio-kpi-avg-paid" class="text-2xl font-black text-sky-600 mt-0.5">0</h3>
+                            <p class="text-[10px] text-slate-400 mt-0.5">Includes Weekly Off & Holidays</p>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center text-lg"><i class="fa-solid fa-business-time"></i></div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div id="biometric-table-container" class="overflow-x-auto overflow-y-auto max-w-full max-h-[calc(100vh-280px)] custom-scrollbar">
+                        <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                            <thead class="bg-slate-900 text-white font-semibold uppercase text-[11px] sticky top-0 z-20 shadow-sm">
+                                <tr>
+                                    <th class="p-3 text-center border-r border-slate-700 w-12 sticky left-0 bg-slate-900 z-30">Sr. No.</th>
+                                    <th class="p-3 text-center border-r border-slate-700 w-20 sticky left-12 bg-slate-900 z-30">Emp Code</th>
+                                    <th class="p-3 border-r border-slate-700 min-w-[200px] sticky left-32 bg-slate-900 z-30">Name of Employee</th>
+                                    <th class="p-3 text-right border-r border-slate-700 min-w-[100px]">Present Days</th>
+                                    <th class="p-3 text-right border-r border-slate-700 min-w-[90px]">Absent Days</th>
+                                    <th class="p-3 text-right border-r border-slate-700 min-w-[90px]">Weekly Off</th>
+                                    <th class="p-3 text-right border-r border-slate-700 min-w-[90px]">Holiday</th>
+                                    <th class="p-3 text-right border-r border-slate-700 min-w-[120px] bg-emerald-950 text-emerald-300 font-extrabold">Total Paid Days</th>
+                                    <th class="p-3 text-center border-r border-slate-700 min-w-[110px] font-mono">Hours Worked</th>
+                                    <th class="p-3 text-center border-r border-slate-700 min-w-[100px] font-mono text-teal-300">Over Time</th>
+                                    <th class="p-3 text-center border-r border-slate-700 min-w-[110px]">Sync Status</th>
+                                    <th class="p-3 text-center border-r border-slate-700 min-w-[130px] sticky right-0 bg-slate-900 z-30 shadow-md">Daily Punches</th>
+                                </tr>
+                            </thead>
+                            <tbody id="biometric-tbody" class="divide-y divide-slate-200 text-slate-800"></tbody>
+                            <tfoot id="biometric-tfoot" class="bg-slate-100 font-bold border-t-2 border-slate-300 text-xs sticky bottom-0 z-20 shadow-md"></tfoot>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 7: RULES CONFIG -->
+            <section id="view-rules-setup" class="space-y-6 hidden no-print">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm max-w-4xl mx-auto">
+                    <div class="border-b border-slate-200 pb-4 mb-6 flex items-center justify-between">
+                        <h2 class="font-extrabold text-slate-800 text-lg"><i class="fa-solid fa-sliders text-amber-500 mr-2"></i>Statutory Rules Config</h2>
+                        <button onclick="saveRulesConfig()" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition">Save to Central DB</button>
+                    </div>
+                    <form id="rules-setup-form" onsubmit="event.preventDefault(); saveRulesConfig();" class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Company Name</label>
+                                <input type="text" id="rule-company-name" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Registered Address</label>
+                                <input type="text" id="rule-company-addr" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-4 gap-4 pt-2">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">PF Rate (%)</label>
+                                <input type="number" step="0.1" id="rule-pf-rate" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">ESIC Rate (%)</label>
+                                <input type="number" step="0.01" id="rule-esic-rate" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">HRA Rate (%)</label>
+                                <input type="number" step="1" id="rule-hra-rate" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 mb-1">Prof. Tax (₹)</label>
+                                <input type="number" id="rule-pt-amount" class="w-full px-3 py-2 border rounded-xl text-sm">
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- BIOMETRIC CONFIRMATION MODAL -->
+    <div id="biometric-confirm-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[80] flex items-center justify-center hidden p-4 no-print">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden max-h-[92vh] flex flex-col">
+            <div class="p-4 px-6 border-b flex justify-between items-center bg-slate-900 text-white">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-lg">
+                        <i class="fa-solid fa-fingerprint"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-extrabold text-sm md:text-base text-white">Confirm Biometric Data Insertion</h3>
+                        <p class="text-[11px] text-slate-400">Review parsed attendance before saving to database</p>
+                    </div>
+                </div>
+                <button onclick="closeBiometricConfirmModal()" class="text-slate-400 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+                    <i class="fa-solid fa-circle-question text-amber-500 text-xl mt-0.5"></i>
+                    <div>
+                        <h4 class="font-bold text-slate-900 text-sm">Kya aap yeh Biometric Data insert karna chahte hain?</h4>
+                        <p class="text-xs text-slate-600 mt-0.5">Confirm karne par yeh mahina <strong>Active Biometric Months</strong> mein jud jayega aur Header Selector, Salary Matrix columns aur Salary Sheet sab jagah auto-sync ho jayega.</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1">Target Month</label>
+                        <select id="bio-modal-month-select" class="w-full px-3 py-1.5 border rounded-lg text-xs font-bold bg-white focus:ring-2 focus:ring-cyan-500">
+                            <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                            <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                            <option value="7">July</option><option value="8" selected>August</option><option value="9">September</option>
+                            <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1">Target Year</label>
+                        <select id="bio-modal-year-select" class="w-full px-3 py-1.5 border rounded-lg text-xs font-bold bg-white focus:ring-2 focus:ring-cyan-500">
+                            <option value="2025">2025</option><option value="2026" selected>2026</option><option value="2027">2027</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 mb-1">Detected Staff Rows</label>
+                        <div id="bio-modal-staff-count" class="px-3 py-1.5 bg-slate-200/80 rounded-lg text-xs font-black text-slate-800">170 Employees</div>
+                    </div>
+                </div>
+
+                <div class="border rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                    <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                        <thead class="bg-slate-800 text-white font-semibold sticky top-0 text-[10px]">
+                            <tr>
+                                <th class="p-2 text-center">Code</th>
+                                <th class="p-2">Name</th>
+                                <th class="p-2 text-right">Present</th>
+                                <th class="p-2 text-right">Absent</th>
+                                <th class="p-2 text-right">WO</th>
+                                <th class="p-2 text-right">Holiday</th>
+                                <th class="p-2 text-right bg-emerald-900 text-emerald-200">Paid Days</th>
+                                <th class="p-2 text-center font-mono">Hours</th>
+                                <th class="p-2 text-center font-mono">OT</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bio-preview-tbody" class="divide-y divide-slate-200 text-slate-700 text-[11px]"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
+                <button type="button" onclick="closeBiometricConfirmModal()" class="px-5 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition cursor-pointer">
+                    <i class="fa-solid fa-xmark mr-1"></i> No, Cancel
+                </button>
+                <button type="button" onclick="confirmBiometricInsertion()" class="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-md shadow-emerald-600/30 transition cursor-pointer flex items-center gap-2">
+                    <i class="fa-solid fa-check"></i> Yes, Insert Data
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DAILY PUNCH LOGS MODAL -->
+    <div id="biometric-daily-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[80] flex items-center justify-center hidden p-4 no-print">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl overflow-hidden max-h-[92vh] flex flex-col">
+            <div class="p-4 px-6 border-b flex justify-between items-center bg-slate-900 text-white">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-lg">
+                        <i class="fa-solid fa-calendar-days"></i>
+                    </div>
+                    <div>
+                        <h3 id="bio-daily-modal-title" class="font-extrabold text-sm md:text-base text-white">Daily Biometric Punch Details</h3>
+                        <p id="bio-daily-modal-sub" class="text-[11px] text-slate-400">Employee Punch Card Logs</p>
+                    </div>
+                </div>
+                <button onclick="closeBiometricDailyModal()" class="text-slate-400 hover:text-white text-lg"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="p-4 overflow-y-auto flex-1">
+                <div class="border rounded-xl overflow-hidden max-h-[65vh] overflow-y-auto">
+                    <table class="w-full text-left text-xs border-collapse whitespace-nowrap">
+                        <thead class="bg-slate-800 text-white font-semibold sticky top-0 text-[10px] uppercase">
+                            <tr>
+                                <th class="p-2.5 text-center">Date</th>
+                                <th class="p-2.5 text-center">Day</th>
+                                <th class="p-2.5 text-center">Shift</th>
+                                <th class="p-2.5 text-center">In Time</th>
+                                <th class="p-2.5 text-center">Out Time</th>
+                                <th class="p-2.5 text-center">Shift Late</th>
+                                <th class="p-2.5 text-center">Shift Early</th>
+                                <th class="p-2.5 text-center">Hours Worked</th>
+                                <th class="p-2.5 text-center">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bio-daily-tbody" class="divide-y divide-slate-200 text-slate-800 text-[11px]"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="p-3 border-t bg-slate-50 flex justify-end">
+                <button onclick="closeBiometricDailyModal()" class="px-5 py-2 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-slate-700">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTEXT MENU POPUP -->
+    <div id="column-context-menu" class="hidden fixed bg-white rounded-md shadow-2xl border border-slate-200 py-1 w-44 z-[60] text-xs font-sans select-none" style="display: none;">
+        <button type="button" onclick="openInsertColumnsDrawer()" class="w-full text-left px-3 py-2 text-slate-800 hover:bg-sky-50 hover:text-sky-800 flex items-center transition cursor-pointer border-l-4 border-sky-600 bg-sky-50/40">
+            <span>Insert columns...</span>
+        </button>
+        <button type="button" onclick="toggleFooterRow()" class="w-full text-left px-3 py-2 text-slate-700 hover:bg-slate-50 flex items-center transition cursor-pointer border-l-4 border-transparent">
+            <span>Show footer</span>
+        </button>
+    </div>
+
+    <!-- INSERT COLUMNS DRAWER -->
+    <div id="insert-columns-backdrop" onclick="closeInsertColumnsDrawer()" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[70] hidden transition-opacity"></div>
+    <div id="insert-columns-drawer" class="fixed top-0 right-0 bottom-0 w-full max-w-xl bg-white shadow-2xl border-l border-slate-200 z-[80] transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col justify-between">
+        <div>
+            <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+                <h3 class="text-base font-bold text-slate-900">Insert columns</h3>
+                <div class="flex items-center gap-3 text-slate-400">
+                    <button class="hover:text-slate-600 transition" title="Pop out"><i class="fa-regular fa-window-restore text-xs"></i></button>
+                    <button onclick="closeInsertColumnsDrawer()" class="hover:text-slate-600 transition" title="Close"><i class="fa-solid fa-xmark text-sm"></i></button>
+                </div>
+            </div>
+
+            <div class="px-6 pt-3 border-b border-slate-200 flex items-center gap-6 text-xs font-semibold">
+                <button class="pb-2 text-sky-600 border-b-2 border-sky-600 font-bold">All fields</button>
+                <button class="pb-2 text-slate-500 hover:text-slate-800 transition">Recommended fields</button>
+            </div>
+
+            <div class="p-6 pb-2 space-y-3">
+                <div class="relative">
+                    <i class="fa-solid fa-search absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+                    <input type="text" id="column-filter-input" oninput="filterColumnDrawerList()" placeholder="Filter" class="w-full pl-8 pr-3 py-1.5 border border-slate-300 rounded text-xs focus:outline-none focus:border-sky-500">
+                </div>
+                <div>
+                    <button type="button" class="text-sky-600 hover:text-sky-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer">
+                        <i class="fa-solid fa-plus text-[10px]"></i> Create new field
+                    </button>
+                </div>
+            </div>
+
+            <div class="px-6 max-h-[52vh] overflow-y-auto">
+                <table class="w-full text-left text-xs border border-slate-200 border-collapse">
+                    <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 text-[11px]">
+                        <tr>
+                            <th class="p-2.5 border-r border-slate-200 text-center w-10">
+                                <input type="checkbox" id="drawer-select-all" onchange="toggleSelectAllDrawerColumns(this.checked)" class="rounded text-sky-600 cursor-pointer">
+                            </th>
+                            <th class="p-2.5 border-r border-slate-200">Field</th>
+                            <th class="p-2.5 border-r border-slate-200">Type</th>
+                            <th class="p-2.5">Table</th>
+                        </tr>
+                    </thead>
+                    <tbody id="drawer-columns-tbody" class="divide-y divide-slate-200 text-slate-800"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-2.5">
+            <button onclick="applyInsertColumns()" class="bg-sky-600 hover:bg-sky-700 text-white font-bold px-6 py-2 rounded text-xs transition shadow-sm cursor-pointer">
+                Update
+            </button>
+            <button onclick="closeInsertColumnsDrawer()" class="bg-white hover:bg-slate-100 text-slate-700 font-semibold px-5 py-2 rounded text-xs border border-slate-300 transition cursor-pointer">
+                Cancel
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL: ADD / EDIT EMPLOYEE -->
+    <div id="employee-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-center justify-center hidden p-4 no-print">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden max-h-[92vh] flex flex-col">
+            <div class="p-5 border-b flex justify-between items-center bg-slate-50">
+                <div>
+                    <h3 id="modal-emp-title" class="font-extrabold text-slate-800 text-base flex items-center gap-2">
+                        <i class="fa-solid fa-user-pen text-indigo-600"></i> Edit Employee Record
+                    </h3>
+                    <p id="modal-emp-info-badge" class="text-xs font-semibold text-indigo-600 mt-0.5 hidden"></p>
+                </div>
+                <button onclick="closeEmployeeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            
+            <form id="employee-form" onsubmit="handleEmployeeSubmit(event)" class="p-6 space-y-4 overflow-y-auto flex-1 text-xs">
+                <input type="hidden" id="form-emp-id">
+
+                <!-- SECTION 1: IDENTITY & STATUS -->
+                <div id="modal-sec-identity" class="space-y-3">
+                    <h4 class="font-bold text-slate-700 uppercase tracking-wider text-[11px] pb-1 border-b border-slate-200 flex items-center gap-1.5">
+                        <i class="fa-regular fa-id-card text-sky-500"></i> Identity & Status
+                    </h4>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+<input type="hidden" id="form-emp-code" value="">
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">PAYROLL EMP CODE</label>
+                            <input type="text" id="form-emp-payroll-code" placeholder="Blank if Cash" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                            <span class="text-[9px] text-slate-400">Blank = Cash (Final Sheet me nahi aayega)</span>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Status</label>
+                            <select id="form-emp-status" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold">
+                                <option value="ACTIVE">ACTIVE</option>
+                                <option value="INACTIVE">INACTIVE</option>
+                                <option value="LEFT">LEFT</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Name in Salary Sheet</label>
+                            <input type="text" id="form-emp-name" placeholder="FULL EMPLOYEE NAME" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Father / Husband Name</label>
+                            <input type="text" id="form-emp-father" placeholder="FATHER OR HUSBAND NAME" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Designation</label>
+                            <input type="text" id="form-emp-desig" placeholder="HELPER / MANAGER" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Department</label>
+                            <input type="text" id="form-emp-dept" placeholder="OPERATIONS / HR / TECH" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SECTION 2: DATES & STATUTORY COMPLIANCE -->
+                <div id="modal-sec-statutory" class="space-y-3">
+                    <h4 class="font-bold text-slate-700 uppercase tracking-wider text-[11px] pb-1 border-b border-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-calendar-days text-amber-500"></i> Dates & Statutory Compliance
+                    </h4>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Date of Birth (DOB)</label>
+                            <input type="date" id="form-emp-dob" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Date of Joining (DOJ)</label>
+                            <input type="date" id="form-emp-doj" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Date of Leaving (DOL)</label>
+                            <input type="date" id="form-emp-dol" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Last Increment</label>
+                            <input type="text" id="form-emp-last-increment" placeholder="JUL-16 / APR-25" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">UAN Number</label>
+                            <input type="text" id="form-emp-uan" placeholder="12-DIGIT UAN" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">EPF Member ID</label>
+                            <input type="text" id="form-emp-epf" placeholder="DL/CPM/XXXXX/XXX" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">ESIC IP Number</label>
+                            <input type="text" id="form-emp-esic" placeholder="10-DIGIT ESIC NO." class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono uppercase">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SECTION 3: SALARY RATES -->
+                <div id="modal-sec-salary" class="space-y-3">
+                    <h4 class="font-bold text-slate-700 uppercase tracking-wider text-[11px] pb-1 border-b border-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-calculator text-emerald-500"></i> Base Salary Structure
+                    </h4>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Monthly Basic Pay (₹)</label>
+                            <input type="number" id="form-emp-basic" placeholder="22500" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-slate-800">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Special Allowance (₹)</label>
+                            <input type="number" id="form-emp-allowance" placeholder="3000" value="0" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">City Allowance (₹)</label>
+                            <input type="number" id="form-emp-city-allow" placeholder="1000" value="0" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SECTION 4: BANKING DETAILS -->
+                <div id="modal-sec-bank" class="space-y-3">
+                    <h4 class="font-bold text-slate-700 uppercase tracking-wider text-[11px] pb-1 border-b border-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-building-columns text-sky-500"></i> Disbursement Banking Info
+                    </h4>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Mode of Transfer</label>
+                            <select id="form-emp-transfer-mode" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold">
+                                <option value="BANK TRANSFER">BANK TRANSFER</option>
+                                <option value="NEFT">NEFT</option>
+                                <option value="RTGS">RTGS</option>
+                                <option value="CASH">CASH</option>
+                                <option value="CHEQUE">CHEQUE</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Bank Name</label>
+                            <input type="text" id="form-emp-bank" placeholder="HDFC BANK" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Bank Account Number</label>
+                            <input type="text" id="form-emp-acc" placeholder="501002391029" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono uppercase">
+                        </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">IFSC Code</label>
+                            <input type="text" id="form-emp-ifsc" placeholder="HDFC0001234" class="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono uppercase">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white">
+                    <button type="button" onclick="closeEmployeeModal()" class="px-5 py-2 border rounded-xl text-xs font-semibold hover:bg-slate-100">Cancel</button>
+                    <button type="submit" class="px-6 py-2 bg-indigo-600 text-white font-bold rounded-xl text-xs hover:bg-indigo-700 shadow-md">Save Record</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: ADD / EDIT SALARY MASTER 2 -->
+    <!-- Single-record Salary Master edit; Employee Master is not modified. -->
+    <div id="salary-edit-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[90] flex items-center justify-center hidden p-4 no-print">
+        <form onsubmit="submitSalaryMasterEdit(event)" class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+            <div class="p-5 border-b bg-slate-50 flex justify-between items-start gap-3"><div><h3 class="font-extrabold text-slate-900 text-base">Edit Salary Master</h3><p id="salary-edit-employee-label" class="text-xs text-slate-500 mt-1"></p></div><button type="button" onclick="closeSalaryMasterEditModal()" class="text-slate-400 hover:text-slate-700"><i class="fa-solid fa-xmark"></i></button></div>
+            <input type="hidden" id="salary-edit-employee-id">
+            <div class="p-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div><label for="salary-edit-basic" class="block text-xs font-bold text-slate-600 mb-1">Basic Pay (₹)</label><input id="salary-edit-basic" type="number" min="0" step="0.01" required class="w-full px-3 py-2 border rounded-xl text-sm"></div>
+                <div><label for="salary-edit-spl" class="block text-xs font-bold text-slate-600 mb-1">Special Allowance (₹)</label><input id="salary-edit-spl" type="number" min="0" step="0.01" required class="w-full px-3 py-2 border rounded-xl text-sm"></div>
+                <div><label for="salary-edit-city" class="block text-xs font-bold text-slate-600 mb-1">City Allowance (₹)</label><input id="salary-edit-city" type="number" min="0" step="0.01" required class="w-full px-3 py-2 border rounded-xl text-sm"></div>
+            </div>
+            <div class="px-5 pb-3 text-[11px] text-emerald-700">Saves to Salary Master only. Employee Master data is unchanged.</div>
+            <div class="p-4 border-t bg-slate-50 flex justify-end gap-2"><button type="button" onclick="closeSalaryMasterEditModal()" class="px-4 py-2 rounded-lg border bg-white text-slate-700 text-xs font-bold">Cancel</button><button id="salary-edit-submit" type="submit" class="px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold">Save Salary</button></div>
+        </form>
+    </div>
+
+    <!-- Bulk Salary Master edit modal -->
+    <div id="salary-bulk-edit-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[90] flex items-center justify-center hidden p-4 no-print">
+        <form onsubmit="submitBulkSalaryEdit(event)" class="bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden">
+            <div class="p-5 border-b bg-slate-50 flex justify-between items-start gap-3"><div><h3 class="font-extrabold text-slate-900 text-base">Bulk Edit Salary</h3><p id="salary-bulk-selected-count" class="text-xs text-slate-500 mt-1">0 selected employees</p></div><button type="button" onclick="closeBulkSalaryEditModal()" class="text-slate-400 hover:text-slate-700"><i class="fa-solid fa-xmark"></i></button></div>
+            <div class="p-5 space-y-4"><div><label for="salary-bulk-mode" class="block text-xs font-bold text-slate-600 mb-1">Adjustment Type</label><select id="salary-bulk-mode" class="w-full px-3 py-2 border rounded-xl text-sm"><option value="set">Set field to amount</option><option value="increase">Increase by amount (₹)</option><option value="decrease">Decrease by amount (₹)</option><option value="percent_increase">Increase by percentage (%)</option><option value="percent_decrease">Decrease by percentage (%)</option></select></div>
+                <p class="text-[11px] text-slate-500">Fill only the fields you want to change. Blank fields remain unchanged.</p><div class="grid grid-cols-1 sm:grid-cols-3 gap-3"><div><label for="salary-bulk-basic" class="block text-xs font-bold text-slate-600 mb-1">Basic Pay</label><input id="salary-bulk-basic" type="number" min="0" step="0.01" placeholder="No change" class="w-full px-3 py-2 border rounded-xl text-sm"></div><div><label for="salary-bulk-spl" class="block text-xs font-bold text-slate-600 mb-1">Special Allowance</label><input id="salary-bulk-spl" type="number" min="0" step="0.01" placeholder="No change" class="w-full px-3 py-2 border rounded-xl text-sm"></div><div><label for="salary-bulk-city" class="block text-xs font-bold text-slate-600 mb-1">City Allowance</label><input id="salary-bulk-city" type="number" min="0" step="0.01" placeholder="No change" class="w-full px-3 py-2 border rounded-xl text-sm"></div></div><div class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900">Bulk update changes Salary Master only; Employee Master and its salary fields remain unchanged.</div></div>
+            <div class="p-4 border-t bg-slate-50 flex justify-end gap-2"><button type="button" onclick="closeBulkSalaryEditModal()" class="px-4 py-2 rounded-lg border bg-white text-slate-700 text-xs font-bold">Cancel</button><button id="salary-bulk-submit" type="submit" class="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold">Apply Changes</button></div>
+        </form>
+    </div>
+
+    <div id="salary-master2-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[75] flex items-center justify-center hidden p-4 no-print">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden max-h-[92vh] flex flex-col">
+            <div class="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div>
+                    <h3 id="sm2-modal-title" class="font-extrabold text-slate-800 text-base"><i class="fa-solid fa-file-invoice-dollar text-teal-600 mr-2"></i>Add Salary Master 2 Record</h3>
+                    <p class="text-xs text-slate-500 mt-1">Add a roster entry or edit an existing Salary Master 2 employee.</p>
+                </div>
+                <button type="button" onclick="closeSalaryMaster2Modal()" class="text-slate-400 hover:text-slate-700 text-xl" aria-label="Close">&times;</button>
+            </div>
+            <form id="salary-master2-form" onsubmit="submitSalaryMaster2Form(event)" class="p-6 space-y-4 overflow-y-auto">
+                <input type="hidden" id="sm2-form-s-no" value="">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="sm2-form-org-code" class="block text-xs font-bold text-slate-600 mb-1">ORG Emp Code <span class="text-rose-500">*</span></label>
+                        <input id="sm2-form-org-code" required class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase focus:ring-2 focus:ring-teal-500" placeholder="Biometric employee code">
+                    </div>
+                    <div>
+                        <label for="sm2-form-payroll-code" class="block text-xs font-bold text-slate-600 mb-1">Payroll Emp Code</label>
+                        <input id="sm2-form-payroll-code" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase focus:ring-2 focus:ring-teal-500" placeholder="Enter later if pending">
+                        <p class="text-[10px] text-amber-700 mt-1">Blank Payroll Emp Code keeps this record pending in Salary Master 2.</p>
+                    </div>
+                    <div class="md:col-span-2">
+                        <label for="sm2-form-name" class="block text-xs font-bold text-slate-600 mb-1">Employee Name <span class="text-rose-500">*</span></label>
+                        <input id="sm2-form-name" required class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase focus:ring-2 focus:ring-teal-500" placeholder="Full employee name">
+                    </div>
+                    <div>
+                        <label for="sm2-form-designation" class="block text-xs font-bold text-slate-600 mb-1">Designation</label>
+                        <input id="sm2-form-designation" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase focus:ring-2 focus:ring-teal-500" placeholder="Helper / Operator">
+                    </div>
+                    <div>
+                        <label for="sm2-form-rate" class="block text-xs font-bold text-slate-600 mb-1">Monthly Salary / Rate (₹)</label>
+                        <input id="sm2-form-rate" type="number" min="0" step="0.01" value="0" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm text-right focus:ring-2 focus:ring-teal-500">
+                    </div>
+                    <div class="md:col-span-2">
+                        <label for="sm2-form-remarks" class="block text-xs font-bold text-slate-600 mb-1">Remarks / Status</label>
+                        <input id="sm2-form-remarks" value="Active" class="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-teal-500" placeholder="Active / New Employee / remarks">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 pt-4 border-t border-slate-200">
+                    <button type="button" onclick="closeSalaryMaster2Modal()" class="px-5 py-2.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100">Cancel</button>
+                    <button id="sm2-form-submit" type="submit" class="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs shadow-md">Save Record</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: PAYSLIP -->
+    <div id="payslip-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[70] flex items-center justify-center hidden p-4 no-print">
+        <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-3xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div class="p-4 border-b flex justify-between bg-slate-50 no-print">
+                <h3 class="font-bold text-slate-800 text-sm">Employee Payslip</h3>
+                <div class="flex items-center gap-2">
+                    <button onclick="window.print()" class="bg-brand-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs"><i class="fa-solid fa-print mr-1"></i>Print</button>
+                    <button onclick="closePayslipModal()" class="text-slate-400 hover:text-slate-600 text-lg px-2"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+            <div class="p-6 overflow-y-auto" id="printable-payslip-content"></div>
+        </div>
+    </div>
+
+    <script src="/script.js?v=salary-master-independent-payroll-20261012" onerror="this.onerror=null; this.src='/static/script.js?v=salary-master-independent-payroll-20261012';"></script>
+</body>
+</html>

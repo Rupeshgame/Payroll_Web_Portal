@@ -1,0 +1,263 @@
+# fix_payroll.py  -  app.py aur script.js mein saare fixes apne-aap lagata hai
+import os, shutil, time, subprocess
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+
+def find_file(*names):
+    for n in names:
+        p = os.path.join(BASE, n)
+        if os.path.isfile(p):
+            return p
+    return None
+
+def read(p):
+    with open(p, encoding='utf-8') as f:
+        return f.read()
+
+def write(p, s):
+    with open(p, 'w', encoding='utf-8') as f:
+        f.write(s)
+
+def backup(p):
+    b = f"{p}.backup_{time.strftime('%Y%m%d_%H%M%S')}"
+    shutil.copy2(p, b)
+    return b
+
+def report(name, done, already=False):
+    if done:
+        print(f"  [FIXED]   {name}")
+    elif already:
+        print(f"  [OK]      {name} (pehle se theek hai)")
+    else:
+        print(f"  [SKIP]    {name} (code nahi mila - manually check karein)")
+
+# ---------------------------------------------------------------------------
+# app.py FIXES
+# ---------------------------------------------------------------------------
+NEW_SM2_BLOCK = '''    # 6. Salary Master 2 roster (independent from Employees Master)
+    # Purani salary_master2 table bina 's_no' ke ho to backup naam se rename karo.
+    sm2_backup_table = None
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='salary_master2'")
+    if cursor.fetchone():
+        cursor.execute('PRAGMA table_info(salary_master2)')
+        old_sm2_cols = {row['name'] for row in cursor.fetchall()}
+        if 's_no' not in old_sm2_cols:
+            sm2_backup_table = f"salary_master2_backup_{int(time.time())}"
+            cursor.execute(f'ALTER TABLE salary_master2 RENAME TO {sm2_backup_table}')
+
+    cursor.execute(\'\'\'
+        CREATE TABLE IF NOT EXISTS salary_master2 (
+            s_no INTEGER PRIMARY KEY,
+            org_emp_code TEXT DEFAULT '',
+            payroll_emp_code TEXT DEFAULT '',
+            employee_name TEXT NOT NULL DEFAULT '',
+            designation TEXT DEFAULT '',
+            monthly_rate REAL DEFAULT 0,
+            remarks_status TEXT DEFAULT 'Active',
+            modified_at TEXT
+        )
+    \'\'\')
+
+    if sm2_backup_table:
+        cursor.execute(f'PRAGMA table_info({sm2_backup_table})')
+        backup_cols = {row['name'] for row in cursor.fetchall()}
+        copy_cols = [c for c in ['org_emp_code', 'payroll_emp_code', 'employee_name',
+                                 'designation', 'monthly_rate', 'remarks_status', 'modified_at']
+                     if c in backup_cols]
+        if 'employee_name' in copy_cols:
+            select_parts = [f"COALESCE({c}, '')" if c == 'employee_name' else c for c in copy_cols]
+            try:
+                cursor.execute(f\'\'\'
+                    INSERT INTO salary_master2 (s_no, {', '.join(copy_cols)})
+                    SELECT rowid, {', '.join(select_parts)} FROM {sm2_backup_table}
+                \'\'\')
+            except Exception as copy_err:
+                print(f'Salary Master 2 old data copy skipped: {copy_err}')
+
+    cursor.execute('PRAGMA table_info(salary_master2)')
+    salary_cols = {row['name'] for row in cursor.fetchall()}
+    salary_migrations = {
+        'org_emp_code': "TEXT DEFAULT ''",
+        'payroll_emp_code': "TEXT DEFAULT ''",
+        'employee_name': "TEXT NOT NULL DEFAULT ''",
+        'designation': "TEXT DEFAULT ''",
+        'monthly_rate': 'REAL DEFAULT 0',
+        'remarks_status': "TEXT DEFAULT 'Active'",
+        'modified_at': 'TEXT'
+    }
+    for col, col_def in salary_migrations.items():
+        if col not in salary_cols:
+            cursor.execute(f'ALTER TABLE salary_master2 ADD COLUMN {col} {col_def}')
+
+    cursor.execute('SELECT COUNT(*) FROM salary_master2')
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany(\'\'\'
+            INSERT INTO salary_master2
+            (s_no, org_emp_code, payroll_emp_code, employee_name, designation, monthly_rate, remarks_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        \'\'\', [
+            (r['sNo'], r['orgEmpCode'], r['payrollEmpCode'], r['employeeName'],
+             r['designation'], r['monthlyRate'], r['remarksStatus'])
+            for r in SALARY_MASTER2_SEED
+        ])
+
+'''
+
+def fix_app(path):
+    src = read(path)
+    orig = src
+    print(f"\napp.py: {path}")
+
+    # 1. "no such column: s_no" fix
+    if 'sm2_backup_table' in src:
+        report('Salary Master 2 table (s_no error)', False, True)
+    else:
+        start = src.find('    # 6. Salary Master 2 roster')
+        end = src.find('    # Default Config', start)
+        if start != -1 and end != -1:
+            src = src[:start] + NEW_SM2_BLOCK + src[end:]
+            report('Salary Master 2 table (s_no error)', True)
+        else:
+            report('Salary Master 2 table (s_no error)', False)
+
+    # 2. Delete karne par doosre employees ka data delete hone wala bug
+    old = '(f"%{emp_id}%",)'
+    if old in src:
+        src = src.replace(old, '(f"%-{emp_id}",)')
+        report('Employee delete LIKE query', True)
+    else:
+        report('Employee delete LIKE query', False, '(f"%-{emp_id}",)' in src)
+
+    # 3. Cleanup auto-created employees (STAFF vs Staff)
+    old = "WHERE designation = 'Staff'"
+    new = "WHERE UPPER(COALESCE(designation, '')) = 'STAFF'"
+    if old in src:
+        src = src.replace(old, new)
+        report('Cleanup STAFF designation', True)
+    else:
+        report('Cleanup STAFF designation', False, new in src)
+
+    # 4. Khaali name se frontend crash
+    old = "'name': r['name'],"
+    if old in src:
+        src = src.replace(old, "'name': r['name'] or '',", 1)
+        report('Empty employee name', True)
+    else:
+        report('Empty employee name', False, "'name': r['name'] or ''," in src)
+
+    # 5. Bulk import crash
+    old = "employees_list = request.json.get('employees', [])"
+    new = "employees_list = (request.get_json(silent=True) or {}).get('employees', [])"
+    if old in src:
+        src = src.replace(old, new)
+        report('Bulk import request', True)
+    else:
+        report('Bulk import request', False, new in src)
+
+    # 6. Stray semicolon
+    src = src.replace("ws['G1'].number_format = ';;;';", "ws['G1'].number_format = ';;;'")
+
+    if src != orig:
+        try:
+            compile(src, 'app.py', 'exec')
+        except SyntaxError as e:
+            print(f"  !! Syntax error aaya, app.py SAVE NAHI ki gayi: {e}")
+            return
+        print(f"  Backup: {backup(path)}")
+        write(path, src)
+        print("  app.py save ho gayi.")
+    else:
+        print("  Koi badlav ki zaroorat nahi.")
+
+# ---------------------------------------------------------------------------
+# script.js FIXES
+# ---------------------------------------------------------------------------
+def fix_js(path):
+    js = read(path)
+    orig = js
+    print(f"\nscript.js: {path}")
+
+    # 1. isMgr is not defined (Dashboard)
+    i = js.find('function updateDashboardAnalytics()')
+    if i != -1:
+        j = js.find('employees.forEach(emp => {', i)
+        k = js.find('calculateEmpPayroll', j)
+        if j != -1 and k != -1:
+            if 'const isMgr' in js[j:k]:
+                report('Dashboard isMgr error', False, True)
+            else:
+                pos = j + len('employees.forEach(emp => {')
+                js = js[:pos] + '\n        const isMgr = isManagerEmployee(emp);' + js[pos:]
+                report('Dashboard isMgr error', True)
+        else:
+            report('Dashboard isMgr error', False)
+    else:
+        report('Dashboard isMgr error', False)
+
+    # 2. Salary Master columns khisakna
+    old_th = '<th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-14 sticky left-0 z-30">S.N.</th>'
+    new_th = ('<th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-10">'
+              '<input type="checkbox" id="master-select-all-cb" onchange="toggleSelectAllEmployees(this.checked)" '
+              'class="rounded text-sky-600 cursor-pointer"></th>\n                '
+              '<th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-12">S.N.</th>')
+    if old_th in js:
+        js = js.replace(old_th, new_th, 1)
+        old_cs = '<td colspan="3" class="p-3 text-right uppercase tracking-wider sticky left-0 bg-slate-200 z-10">'
+        js = js.replace(old_cs, old_cs.replace('colspan="3"', 'colspan="4"'), 1)
+        report('Salary Master table columns', True)
+    else:
+        report('Salary Master table columns', False, 'bg-slate-900 w-12">S.N.</th>' in js)
+
+    # 3. Status colour (ACTIVE / LEFT)
+    old = "const statusColor = val === 'Active' ? 'bg-emerald-100 text-emerald-800' : (val === 'Left' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700');"
+    new = ("const stUp = String(val || 'ACTIVE').toUpperCase();\n"
+           "                    const statusColor = stUp === 'ACTIVE' ? 'bg-emerald-100 text-emerald-800' : "
+           "(stUp === 'LEFT' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700');")
+    if old in js:
+        js = js.replace(old, new)
+        report('Status colour', True)
+    else:
+        report('Status colour', False, 'const stUp' in js)
+
+    # 4. Search crash (khaali name/code)
+    n = js.count('emp.name.toLowerCase()') + js.count('emp.code.toLowerCase()')
+    js = js.replace('emp.name.toLowerCase()', "String(emp.name || '').toLowerCase()")
+    js = js.replace('emp.code.toLowerCase()', "String(emp.code || '').toLowerCase()")
+    report(f'Search crash ({n} jagah)', n > 0, n == 0)
+
+    # 5. Salary matrix mein har mahina 31 din
+    old = 'calculateEmpPayroll(emp, 31, (rec ? rec.paidDays : 31), rec)'
+    new = ('calculateEmpPayroll(emp, new Date(m.year, m.monthNum, 0).getDate(), '
+           '(rec ? rec.paidDays : new Date(m.year, m.monthNum, 0).getDate()), rec)')
+    c = js.count(old)
+    js = js.replace(old, new)
+    report(f'Matrix days-in-month ({c} jagah)', c > 0, c == 0)
+
+    if js != orig:
+        print(f"  Backup: {backup(path)}")
+        write(path, js)
+        print("  script.js save ho gayi.")
+        try:
+            r = subprocess.run(['node', '--check', path], capture_output=True, text=True)
+            print("  JS syntax check: OK" if r.returncode == 0 else f"  !! JS syntax error:\n{r.stderr}")
+        except FileNotFoundError:
+            pass  # Node installed nahi hai, check skip
+    else:
+        print("  Koi badlav ki zaroorat nahi.")
+
+# ---------------------------------------------------------------------------
+if __name__ == '__main__':
+    app_path = find_file('app.py')
+    js_path = find_file(os.path.join('static', 'script.js'), 'script.js')
+
+    if app_path:
+        fix_app(app_path)
+    else:
+        print("app.py nahi mila! fix_payroll.py ko app.py wale folder mein rakhein.")
+
+    if js_path:
+        fix_js(js_path)
+    else:
+        print("script.js nahi mila (static/script.js ya app.py ke paas hona chahiye).")
+
+    print("\nHo gaya! Ab Flask server restart karein aur browser mein Ctrl+Shift+R dabayein.")

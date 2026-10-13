@@ -1,0 +1,3350 @@
+let payrollConfig = {
+    companyName: "PRANAV CREATION PRIVATE LIMITED",
+    companyAddr: "Sector 62, Electronic City, Noida, Uttar Pradesh - 201301",
+    pfRate: 12,
+    esicRate: 0.75,
+    hraRate: 40,
+    ptAmount: 200
+};
+
+let currentTab = 'dashboard';
+let currentMasterSubTab = 'emp';
+let currentSalarySubTab = 'basic_da';
+let barChartInstance = null;
+let pieChartInstance = null;
+let contextMenuJustOpened = false;
+
+let employees = [];
+let salaryMaster = []; // independent salary values, detached from Employee Master fields
+let salaryMaster2 = [];
+let monthlyPayrollRecords = {};
+let biometricMonths = [];
+let biometricRecords = {};
+let currentBiometricMonthKey = "";
+let pendingBiometricImportData = null;
+let selectedEmployeeIds = new Set();
+let selectedSalaryMaster2Ids = new Set();
+let employeeMasterViewMode = 'normal'; // 'normal' or 'pending'
+let salaryMaster2EditingSNo = null;
+
+// Master Column Registry
+const masterFieldDefinitions = [
+    { id: 'payrollCode', label: 'Payroll Emp Code', type: 'Text', table: 'Employees', default: true },
+    { id: 'status', label: 'STATUS', type: 'Choice', table: 'Employees', default: true },
+    { id: 'name', label: 'Name in Salary Sheet', type: 'Text', table: 'Employees', default: true },
+    { id: 'designation', label: 'Designation', type: 'Text', table: 'Employees', default: true },
+    { id: 'fatherOrHusbandName', label: 'Father/Husband Name', type: 'Text', table: 'Employees', default: true },
+    { id: 'dob', label: 'Dob', type: 'Date', table: 'Employees', default: true },
+    { id: 'doj', label: 'DOJ', type: 'Date', table: 'Employees', default: true },
+    { id: 'dol', label: 'DOL', type: 'Date', table: 'Employees', default: true },
+    { id: 'uan', label: 'UAN', type: 'Text', table: 'Employees', default: true },
+    { id: 'epfMemberId', label: 'EPF Member ID', type: 'Text', table: 'Employees', default: true },
+    { id: 'esicIpNumber', label: 'ESIC IP Number', type: 'Text', table: 'Employees', default: true },
+    { id: 'bank', label: 'Bank Name', type: 'Text', table: 'Employees', default: true },
+    { id: 'acc', label: 'Bank Account Number', type: 'Text', table: 'Employees', default: true },
+    { id: 'ifsc', label: 'IFSC', type: 'Text', table: 'Employees', default: true },
+    { id: 'modeOfTransfer', label: 'Mode of Transfer', type: 'Choice', table: 'Employees', default: true },
+    { id: 'createdAt', label: 'Created Date & Time', type: 'DateTime', table: 'Audit', default: false },
+    { id: 'modifiedAt', label: 'Modify Date & Time', type: 'DateTime', table: 'Audit', default: false },
+    { id: 'dept', label: 'Department', type: 'Text', table: 'Employees', default: false },
+    { id: 'lastIncrement', label: 'Last Increment', type: 'Text', table: 'Employees', default: false }
+];
+
+// Universal Date Parser (Supports Excel serials, ISO, DD-MM-YYYY, DD/MM/YYYY)
+function parseDateUniversal(val) {
+    if (!val || val === '-' || val === 'null' || val === 'undefined') return null;
+    if (val instanceof Date && !isNaN(val.getTime())) return val;
+
+    if (typeof val === 'number' || (!isNaN(val) && !isNaN(parseFloat(val)) && isFinite(val) && parseFloat(val) > 10000 && parseFloat(val) < 80000)) {
+        const serial = parseFloat(val);
+        const epoch = new Date(Date.UTC(1899, 11, 30));
+        return new Date(epoch.getTime() + Math.round(serial * 86400000));
+    }
+
+    const s = String(val).trim();
+    if (!s || s === '-' || s.toUpperCase() === 'NONE') return null;
+
+    const isoMatch = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+    if (isoMatch) return new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
+
+    const dmyMatch = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+    if (dmyMatch) return new Date(parseInt(dmyMatch[3]), parseInt(dmyMatch[2]) - 1, parseInt(dmyMatch[1]));
+
+    const dMmmYMatch = s.match(/^(\d{1,2})[-\s]([A-Za-z]{3,})[-\s](\d{4})/);
+    if (dMmmYMatch) {
+        const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+        const mStr = dMmmYMatch[2].slice(0, 3).toLowerCase();
+        if (mStr in months) return new Date(parseInt(dMmmYMatch[3]), months[mStr], parseInt(dMmmYMatch[1]));
+    }
+
+    const fallback = new Date(s);
+    return isNaN(fallback.getTime()) ? null : fallback;
+}
+
+// Format to DD-MMM-YYYY for Table Display (e.g. 15-Aug-2024)
+function formatDateToDDMMMYYYY(val) {
+    if (!val || val === '-' || val === 'null' || val === 'undefined') return '-';
+    const d = parseDateUniversal(val);
+    if (!d || isNaN(d.getTime())) return String(val).toUpperCase();
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day}-${month}-${year}`;
+}
+
+// Format to YYYY-MM-DD for HTML5 <input type="date">
+function toInputDateFormat(val) {
+    if (!val) return '';
+    const d = parseDateUniversal(val);
+    if (!d || isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function isManagerEmployee(emp) {
+    const code = String(emp.code || '').trim().toUpperCase();
+    const pCode = String(emp.payrollCode || '').trim().toUpperCase();
+    const desig = String(emp.designation || '').trim().toUpperCase();
+    return /[A-Z]/.test(code) || /[A-Z]/.test(pCode) || desig.includes('MANAGER');
+}
+
+let activeEmployeeColumnIds = [];
+
+function loadActiveColumns() {
+    // Payroll Emp Code should be visible by default for every user, including
+    // users who have older column selections saved in localStorage.
+    const defaultColumns = masterFieldDefinitions
+        .filter(f => f.default && f.id !== 'code' && f.id !== 'orgEmpCode')
+        .map(f => f.id);
+
+    try {
+        const saved = localStorage.getItem('payroll_emp_active_cols');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            const validIds = Array.isArray(parsed)
+                ? parsed.filter(id => masterFieldDefinitions.some(f => f.id === id) && id !== 'code' && id !== 'orgEmpCode')
+                : defaultColumns;
+            activeEmployeeColumnIds = [...new Set(validIds)];
+        } else {
+            activeEmployeeColumnIds = [...defaultColumns];
+        }
+    } catch (e) {
+        activeEmployeeColumnIds = [...defaultColumns];
+    }
+
+    // Always keep Payroll Emp Code selected; no repeated manual insertion needed.
+    if (!activeEmployeeColumnIds.includes('payrollCode')) {
+        activeEmployeeColumnIds.unshift('payrollCode');
+    }
+    try {
+        localStorage.setItem('payroll_emp_active_cols', JSON.stringify(activeEmployeeColumnIds));
+    } catch (e) {
+        // The column remains active in memory if browser storage is unavailable.
+    }
+}
+
+// Fetch Central State from Python Backend
+async function fetchServerData() {
+    let data = null;
+    try {
+        const response = await fetch('/api/data', {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
+        });
+        const responseText = await response.text();
+        if (!response.ok) {
+            let detail = responseText;
+            try {
+                const parsedError = JSON.parse(responseText);
+                detail = parsedError.error || parsedError.message || responseText;
+            } catch (_) {}
+            throw new Error(`HTTP ${response.status}: ${String(detail || response.statusText).slice(0, 180)}`);
+        }
+        try {
+            data = JSON.parse(responseText);
+        } catch (_) {
+            throw new Error('The server returned a non-JSON response. Check that the page is being served by Flask, not opened as a local HTML file.');
+        }
+        if (!data || data.error) {
+            throw new Error(data?.error || 'The server returned an empty response.');
+        }
+    } catch (err) {
+        console.error('API /api/data fetch error:', err);
+        const detail = err && err.message ? err.message : String(err || 'Unknown error');
+        let helpText;
+        if (window.location.protocol === 'file:') {
+            helpText = ' Do not open index.html directly. Start Flask with `python app.py` and open http://127.0.0.1:5000.';
+        } else if (detail === 'Failed to fetch' || /networkerror|load failed/i.test(detail)) {
+            helpText = ` Could not reach ${window.location.origin}/api/data. Start/restart the Python Flask server and open this page from that same server, not a static/Live Server URL.`;
+        } else {
+            helpText = ` API detail: ${detail.slice(0, 220)}. Check ${window.location.origin}/api/health and the Flask terminal log.`;
+        }
+        showToast(`Server connection failed!${helpText}`, 'error');
+        return;
+    }
+
+    try {
+        if (data.config && Object.keys(data.config).length > 0) {
+            payrollConfig = data.config;
+        }
+        employees = (data.employees || []).filter(emp => emp.masterApproved !== false);
+        salaryMaster = Array.isArray(data.salaryMaster) ? data.salaryMaster : [];
+        salaryMaster2 = Array.isArray(data.salaryMaster2) ? data.salaryMaster2 : [];
+        monthlyPayrollRecords = data.records || {};
+        biometricMonths = data.biometricMonths || [];
+        biometricRecords = data.biometricRecords || {};
+
+        if (biometricMonths.length > 0 && !currentBiometricMonthKey) {
+            currentBiometricMonthKey = biometricMonths[0].monthKey;
+        }
+
+        updateGlobalPeriodSelectors();
+        populateRulesForm();
+        renderSalarySheet();
+        renderSalarySheetCalc();
+        renderMasterTable();
+        renderSalaryDataTable();
+        renderBiometricModule();
+        if (currentTab === 'dashboard') updateDashboardAnalytics();
+    } catch (renderErr) {
+        console.error('Client render error after fetch:', renderErr);
+    }
+}
+
+// STRICT RULE: Populate Header Selectors with ONLY active Biometric Months and Years
+function updateGlobalPeriodSelectors() {
+    const monthSelect = document.getElementById('global-month-select');
+    const yearSelect = document.getElementById('global-year-select');
+    if (!monthSelect || !yearSelect) return;
+
+    if (!biometricMonths || biometricMonths.length === 0) {
+        monthSelect.innerHTML = '<option class="bg-slate-800 text-white" value="">No Biometric Data</option>';
+        yearSelect.innerHTML = '<option class="bg-slate-800 text-white" value="2026">2026</option>';
+        return;
+    }
+
+    const uniqueYears = [...new Set(biometricMonths.map(bm => bm.year))].sort((a, b) => b - a);
+    const currYearVal = parseInt(yearSelect.value);
+    const activeYear = uniqueYears.includes(currYearVal) ? currYearVal : uniqueYears[0];
+
+    yearSelect.innerHTML = uniqueYears.map(yr => 
+        `<option class="bg-slate-800 text-white font-semibold" value="${yr}" ${yr === activeYear ? 'selected' : ''}>${yr}</option>`
+    ).join('');
+
+    const monthsForYear = biometricMonths.filter(bm => bm.year === activeYear).sort((a, b) => b.month - a.month);
+    const currMonthVal = parseInt(monthSelect.value);
+    const activeMonth = monthsForYear.some(bm => bm.month === currMonthVal) ? currMonthVal : monthsForYear[0].month;
+
+    monthSelect.innerHTML = monthsForYear.map(bm => 
+        `<option class="bg-slate-800 text-white font-semibold" value="${bm.month}" ${bm.month === activeMonth ? 'selected' : ''}>${bm.monthName}</option>`
+    ).join('');
+}
+
+window.onload = function() {
+    loadActiveColumns();
+    fetchServerData();
+    switchTab('dashboard');
+
+    document.addEventListener('click', function(e) {
+        if (contextMenuJustOpened) return;
+
+        const optDropdown = document.getElementById('master-options-dropdown');
+        const optBtn = document.getElementById('btn-master-options');
+        if (optDropdown && !optDropdown.classList.contains('hidden')) {
+            if (!optDropdown.contains(e.target) && !optBtn?.contains(e.target)) {
+                optDropdown.classList.add('hidden');
+                document.getElementById('options-chevron')?.classList.remove('rotate-180');
+            }
+        }
+
+        const contextMenu = document.getElementById('column-context-menu');
+        if (contextMenu && !contextMenu.classList.contains('hidden')) {
+            if (!contextMenu.contains(e.target) && !e.target.closest('#th-3dots-btn')) {
+                contextMenu.classList.add('hidden');
+                contextMenu.style.display = 'none';
+            }
+        }
+    });
+};
+
+function switchTab(tabId) {
+    currentTab = tabId;
+    const tabs = ['dashboard', 'master', 'salary-data', 'salary-sheet-calc', 'salary-sheet', 'biometric', 'rules-setup'];
+
+    tabs.forEach(id => {
+        const viewEl = document.getElementById(`view-${id}`);
+        if (viewEl) viewEl.classList.add('hidden');
+
+        const railBtn = document.getElementById(`rail-btn-${id}`);
+        if (railBtn) {
+            railBtn.classList.remove('bg-slate-800', 'text-sky-400', 'text-indigo-400', 'text-teal-400', 'text-emerald-400', 'text-cyan-400', 'text-amber-400');
+            railBtn.classList.add('text-slate-400');
+        }
+
+        const drawerBtn = document.getElementById(`tab-btn-${id}`);
+        if (drawerBtn) {
+            drawerBtn.classList.remove('bg-brand-600', 'text-white');
+            drawerBtn.classList.add('text-slate-400');
+        }
+    });
+
+    document.getElementById(`view-${tabId}`)?.classList.remove('hidden');
+
+    const activeRailBtn = document.getElementById(`rail-btn-${tabId}`);
+    if (activeRailBtn) {
+        activeRailBtn.classList.remove('text-slate-400');
+        if (tabId === 'dashboard') activeRailBtn.classList.add('bg-slate-800', 'text-sky-400');
+        else if (tabId === 'master') activeRailBtn.classList.add('bg-slate-800', 'text-indigo-400');
+        else if (tabId === 'salary-data') activeRailBtn.classList.add('bg-slate-800', 'text-teal-400');
+        else if (tabId === 'salary-sheet-calc') activeRailBtn.classList.add('bg-slate-800', 'text-sky-400');
+        else if (tabId === 'salary-sheet') activeRailBtn.classList.add('bg-slate-800', 'text-emerald-400');
+        else if (tabId === 'biometric') activeRailBtn.classList.add('bg-slate-800', 'text-cyan-400');
+        else if (tabId === 'rules-setup') activeRailBtn.classList.add('bg-slate-800', 'text-amber-400');
+    }
+
+    document.getElementById(`tab-btn-${tabId}`)?.classList.add('bg-brand-600', 'text-white');
+
+    if (tabId === 'dashboard') updateDashboardAnalytics();
+    else if (tabId === 'master') renderMasterTable();
+    else if (tabId === 'salary-data') renderSalaryDataTable();
+    else if (tabId === 'salary-sheet-calc') renderSalarySheetCalc();
+    else if (tabId === 'salary-sheet') renderSalarySheet();
+    else if (tabId === 'biometric') renderBiometricModule();
+
+    closeSidebar();
+}
+
+// -------------------------------------------------------------
+// MASTER DATA ACCORDION
+// -------------------------------------------------------------
+function toggleMasterMenu() {
+    const submenu = document.getElementById('master-submenu');
+    if (!submenu) return;
+    submenu.classList.toggle('hidden');
+}
+
+function openMasterDrawer() {
+    openSidebar();
+    const submenu = document.getElementById('master-submenu');
+    if (submenu) submenu.classList.remove('hidden');
+}
+
+function navigateToMasterSubTab(subTab) {
+    switchTab('master');
+    switchMasterSubTab(subTab);
+    closeSidebar();
+}
+
+function switchMasterSubTab(subTab) {
+    currentMasterSubTab = subTab;
+    employeeMasterViewMode = 'normal';
+    const subTabs = ['emp', 'salary', 'bank', 'salary2'];
+    
+    subTabs.forEach(st => {
+        const subnav = document.getElementById(`subnav-${st}`);
+        if (subnav) {
+            if (st === subTab) {
+                subnav.className = "w-full text-left py-2 px-3 rounded-lg text-xs font-bold text-sky-400 bg-slate-800 flex items-center gap-2.5 transition";
+            } else {
+                subnav.className = "w-full text-left py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2.5 transition";
+            }
+        }
+    });
+
+    const titleEl = document.getElementById('master-view-title');
+    const subtitleEl = document.getElementById('master-view-subtitle');
+    if (subTab === 'emp') {
+        if (titleEl) titleEl.innerText = 'Employees Master';
+        if (subtitleEl) subtitleEl.innerText = 'Official employee directory, statutory and master records.';
+    } else if (subTab === 'salary') {
+        if (titleEl) titleEl.innerText = 'Salary Master';
+        if (subtitleEl) subtitleEl.innerText = 'Base salaries, special allowances, and salary rate structure.';
+    } else if (subTab === 'bank') {
+        if (titleEl) titleEl.innerText = 'Bank Details Master';
+        if (subtitleEl) subtitleEl.innerText = 'Employee disbursement bank accounts, IFSC and payment modes.';
+    } else if (subTab === 'salary2') {
+        if (titleEl) titleEl.innerText = 'Salary Master 2';
+        if (subtitleEl) subtitleEl.innerText = 'Employee salary and rate roster imported from the Salary Master 2 workbook.';
+    }
+
+    renderMasterTable();
+    updatePendingEmployeeButton();
+}
+
+// -------------------------------------------------------------
+// SALARY DATA ACCORDION
+// -------------------------------------------------------------
+function toggleSalaryDataMenu() {
+    const submenu = document.getElementById('salary-data-submenu');
+    if (!submenu) return;
+    submenu.classList.toggle('hidden');
+}
+
+function openSalaryDataDrawer() {
+    openSidebar();
+    const submenu = document.getElementById('salary-data-submenu');
+    if (submenu) submenu.classList.remove('hidden');
+}
+
+function navigateToSalaryDataSubTab(subTabKey) {
+    currentSalarySubTab = subTabKey;
+    switchTab('salary-data');
+
+    const salarySubKeys = ['basic_da', 'hra', 'spl_allow', 'city_allow', 'deduct_short', 'ot_arrear', 'penalty', 'advance', 'pf', 'esi', 'epf'];
+    salarySubKeys.forEach(k => {
+        const btn = document.getElementById(`subsal-${k}`);
+        if (btn) {
+            const dot = btn.querySelector('i');
+            if (k === subTabKey) {
+                btn.className = "w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-bold text-teal-300 bg-slate-800 flex items-center gap-2 transition";
+                if (dot) dot.className = "fa-regular fa-circle-dot text-[8px] text-teal-300";
+            } else {
+                btn.className = "w-full text-left py-1.5 px-2.5 rounded-lg text-[11px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-2 transition";
+                if (dot) dot.className = "fa-regular fa-circle-dot text-[8px] text-slate-500";
+            }
+        }
+    });
+
+    renderSalaryDataTable();
+    closeSidebar();
+}
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar-drawer');
+    if (sidebar.classList.contains('-translate-x-full')) {
+        openSidebar();
+    } else {
+        closeSidebar();
+    }
+}
+
+function openSidebar() {
+    document.getElementById('sidebar-drawer')?.classList.remove('-translate-x-full');
+    document.getElementById('sidebar-backdrop')?.classList.remove('hidden');
+}
+
+function closeSidebar() {
+    document.getElementById('sidebar-drawer')?.classList.add('-translate-x-full');
+    document.getElementById('sidebar-backdrop')?.classList.add('hidden');
+}
+
+// -------------------------------------------------------------
+// 3-DOTS CONTEXT MENU POPUP
+// -------------------------------------------------------------
+function toggleColumnContextMenu(event, element) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const menu = document.getElementById('column-context-menu');
+    if (!menu) return;
+
+    if (!menu.classList.contains('hidden') && menu.style.display !== 'none') {
+        menu.classList.add('hidden');
+        menu.style.display = 'none';
+        return;
+    }
+
+    const btn = element || event?.currentTarget || document.getElementById('th-3dots-btn');
+    if (!btn) return;
+
+    const rect = btn.getBoundingClientRect();
+    let top = rect.bottom + 4;
+    let left = rect.left - 130;
+
+    if (left < 10) left = 10;
+    if (left + 180 > window.innerWidth) left = window.innerWidth - 190;
+    if (top + 100 > window.innerHeight) top = rect.top - 85;
+
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+    menu.classList.remove('hidden');
+    menu.style.display = 'block';
+
+    contextMenuJustOpened = true;
+    setTimeout(() => {
+        contextMenuJustOpened = false;
+    }, 200);
+}
+
+function toggleFooterRow() {
+    const contextMenu = document.getElementById('column-context-menu');
+    if (contextMenu) {
+        contextMenu.classList.add('hidden');
+        contextMenu.style.display = 'none';
+    }
+    const tfoot = document.getElementById('master-tfoot');
+    if (tfoot) {
+        tfoot.classList.toggle('hidden');
+        showToast(tfoot.classList.contains('hidden') ? "Footer hidden" : "Footer shown");
+    }
+}
+
+// -------------------------------------------------------------
+// INSERT COLUMNS DRAWER
+// -------------------------------------------------------------
+let tempDrawerCheckedIds = [];
+
+function openInsertColumnsDrawer() {
+    const menu = document.getElementById('column-context-menu');
+    if (menu) {
+        menu.classList.add('hidden');
+        menu.style.display = 'none';
+    }
+
+    const drawer = document.getElementById('insert-columns-drawer');
+    const backdrop = document.getElementById('insert-columns-backdrop');
+    if (!drawer || !backdrop) return;
+
+    tempDrawerCheckedIds = [...activeEmployeeColumnIds];
+    renderDrawerColumnsList();
+
+    backdrop.classList.remove('hidden');
+    drawer.classList.remove('translate-x-full');
+}
+
+function closeInsertColumnsDrawer() {
+    const drawer = document.getElementById('insert-columns-drawer');
+    const backdrop = document.getElementById('insert-columns-backdrop');
+    drawer?.classList.add('translate-x-full');
+    backdrop?.classList.add('hidden');
+}
+
+function renderDrawerColumnsList(filterQuery = '') {
+    const tbody = document.getElementById('drawer-columns-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const query = filterQuery.toLowerCase().trim();
+    const filtered = masterFieldDefinitions.filter(f => f.label.toLowerCase().includes(query) || f.table.toLowerCase().includes(query));
+
+    filtered.forEach(field => {
+        const isChecked = tempDrawerCheckedIds.includes(field.id);
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-sky-50/50 transition cursor-pointer";
+        tr.onclick = function(e) {
+            if (e.target.tagName !== 'INPUT') {
+                const cb = tr.querySelector('input[type="checkbox"]');
+                if (cb) {
+                    cb.checked = !cb.checked;
+                    toggleDrawerFieldCheck(field.id, cb.checked);
+                }
+            }
+        };
+
+        tr.innerHTML = `
+            <td class="p-2.5 border-r border-slate-200 text-center">
+                <input type="checkbox" value="${field.id}" ${isChecked ? 'checked' : ''} ${field.id === 'payrollCode' ? 'checked disabled title="Payroll Emp Code is always included in Employee Master"' : ''} onchange="toggleDrawerFieldCheck('${field.id}', this.checked)" class="rounded text-sky-600 cursor-pointer">
+            </td>
+            <td class="p-2.5 border-r border-slate-200 font-medium text-slate-800">${field.label}</td>
+            <td class="p-2.5 border-r border-slate-200 text-slate-500">${field.type}</td>
+            <td class="p-2.5 text-slate-500">${field.table}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    const selectAllCb = document.getElementById('drawer-select-all');
+    if (selectAllCb) {
+        selectAllCb.checked = masterFieldDefinitions.every(f => tempDrawerCheckedIds.includes(f.id));
+    }
+}
+
+function filterColumnDrawerList() {
+    const q = document.getElementById('column-filter-input')?.value || '';
+    renderDrawerColumnsList(q);
+}
+
+function toggleDrawerFieldCheck(fieldId, isChecked) {
+    // Payroll Emp Code is mandatory in Employee Master and cannot be removed.
+    if (fieldId === 'payrollCode') {
+        if (!tempDrawerCheckedIds.includes('payrollCode')) tempDrawerCheckedIds.push('payrollCode');
+        renderDrawerColumnsList(document.getElementById('column-filter-input')?.value || '');
+        return;
+    }
+    if (isChecked) {
+        if (!tempDrawerCheckedIds.includes(fieldId)) tempDrawerCheckedIds.push(fieldId);
+    } else {
+        tempDrawerCheckedIds = tempDrawerCheckedIds.filter(id => id !== fieldId);
+    }
+}
+
+function toggleSelectAllDrawerColumns(isChecked) {
+    if (isChecked) {
+        tempDrawerCheckedIds = masterFieldDefinitions.filter(f => f.id !== 'code' && f.id !== 'orgEmpCode').map(f => f.id);
+    } else {
+        // Keep Payroll Emp Code selected even when all optional columns are cleared.
+        tempDrawerCheckedIds = ['payrollCode'];
+    }
+    filterColumnDrawerList();
+}
+
+function applyInsertColumns() {
+    // Payroll Emp Code stays included regardless of saved drawer selections.
+    if (!tempDrawerCheckedIds.includes('payrollCode')) tempDrawerCheckedIds.unshift('payrollCode');
+    tempDrawerCheckedIds = tempDrawerCheckedIds.filter(id => id !== 'code' && id !== 'orgEmpCode');
+    if (tempDrawerCheckedIds.length === 0) {
+        showToast("Please select at least 1 column!", "error");
+        return;
+    }
+
+    activeEmployeeColumnIds = [...new Set(tempDrawerCheckedIds)];
+    localStorage.setItem('payroll_emp_active_cols', JSON.stringify(activeEmployeeColumnIds));
+
+    renderMasterTable();
+    closeInsertColumnsDrawer();
+    showToast(`Table updated with ${activeEmployeeColumnIds.length} columns!`);
+}
+
+// -------------------------------------------------------------
+// OPTIONS BUTTON & COLORFUL EXCELJS TEMPLATE EXPORT
+// -------------------------------------------------------------
+function toggleMasterOptionsDropdown(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const dropdown = document.getElementById('master-options-dropdown');
+    const chevron = document.getElementById('options-chevron');
+    if (!dropdown) return;
+
+    if (dropdown.classList.contains('hidden')) {
+        dropdown.classList.remove('hidden');
+        chevron?.classList.add('rotate-180');
+    } else {
+        dropdown.classList.add('hidden');
+        chevron?.classList.remove('rotate-180');
+    }
+}
+
+async function downloadContextualTemplate() {
+    toggleMasterOptionsDropdown();
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+
+    let columnsConfig = [];
+    let dataRows = [];
+    let fileName = "";
+    let sheetTitle = "";
+
+    if (currentMasterSubTab === 'emp') {
+        const activeDefs = masterFieldDefinitions.filter(f => activeEmployeeColumnIds.includes(f.id));
+        fileName = "Employees_Master_Template.xlsx";
+        sheetTitle = "Employees Master";
+
+        columnsConfig = activeDefs.map(def => ({
+            header: def.label,
+            key: def.id,
+            type: def.type,
+            width: Math.max(def.label.length + 5, 14)
+        }));
+
+        employees.forEach(emp => {
+            const rowObj = {};
+            activeDefs.forEach(def => {
+                rowObj[def.id] = emp[def.id] !== undefined ? emp[def.id] : "";
+            });
+            dataRows.push(rowObj);
+        });
+
+    } else if (currentMasterSubTab === 'salary') {
+        fileName = "Salary_Master_Template.xlsx";
+        sheetTitle = "Salary Master";
+        columnsConfig = [
+            { header: "Emp Code", key: "code", type: "Text", width: 14 },
+            { header: "Name in Salary Sheet", key: "name", type: "Text", width: 28 },
+            { header: "Monthly Basic Pay", key: "basicRate", type: "Currency", width: 20 },
+            { header: "Special Allowance", key: "splAllowance", type: "Currency", width: 20 }
+        ];
+
+        salaryMaster.forEach(row => {
+            dataRows.push({ code: row.empCode || "", name: row.name || "", basicRate: row.basicRate || 0, splAllowance: row.splAllowance || 0 });
+        });
+
+    } else if (currentMasterSubTab === 'bank') {
+        fileName = "Bank_Details_Template.xlsx";
+        sheetTitle = "Bank Details Master";
+        columnsConfig = [
+            { header: "Emp Code", key: "code", type: "Text", width: 14 },
+            { header: "Name in Salary Sheet", key: "name", type: "Text", width: 28 },
+            { header: "Bank Name", key: "bank", type: "Text", width: 18 },
+            { header: "Bank Account Number", key: "acc", type: "Text", width: 24 },
+            { header: "IFSC", key: "ifsc", type: "Text", width: 16 },
+            { header: "Mode of Transfer", key: "modeOfTransfer", type: "Choice", width: 18 }
+        ];
+
+        employees.forEach(emp => {
+            dataRows.push({
+                code: emp.code || "",
+                name: emp.name || "",
+                bank: emp.bank || "",
+                acc: emp.acc || "",
+                ifsc: emp.ifsc || "",
+                modeOfTransfer: emp.modeOfTransfer || "Bank Transfer"
+            });
+        });
+
+    } else if (currentMasterSubTab === 'salary2') {
+        fileName = 'Salary_Master_2_Template.xlsx';
+        sheetTitle = 'Salary Master 2';
+        columnsConfig = [
+            { header: 'S.No.', key: 'sNo', type: 'Number', width: 10 },
+            { header: 'ORG Emp Code', key: 'orgEmpCode', type: 'Text', width: 16 },
+            { header: 'Payroll Emp Code', key: 'payrollEmpCode', type: 'Text', width: 18 },
+            { header: 'Employee Name', key: 'employeeName', type: 'Text', width: 32 },
+            { header: 'Designation', key: 'designation', type: 'Text', width: 20 },
+            { header: 'Monthly Salary / Rate (₹)', key: 'monthlyRate', type: 'Currency', width: 24 },
+            { header: 'Remarks / Status', key: 'remarksStatus', type: 'Text', width: 24 }
+        ];
+        dataRows = salaryMaster2.map(r => ({
+            sNo: r.sNo, orgEmpCode: r.orgEmpCode || '', payrollEmpCode: r.payrollEmpCode || '',
+            employeeName: r.employeeName || '', designation: r.designation || '',
+            monthlyRate: r.monthlyRate || 0, remarksStatus: r.remarksStatus || ''
+        }));
+
+    } else if (currentMasterSubTab === 'attendance') {
+        fileName = `Attendance_Master_${period.monthName}_${period.year}_Template.xlsx`;
+        sheetTitle = `Attendance ${period.monthName} ${period.year}`;
+        columnsConfig = [
+            { header: "Emp Code", key: "code", type: "Text", width: 14 },
+            { header: "Name in Salary Sheet", key: "name", type: "Text", width: 28 },
+            { header: "Month Days", key: "monthDays", type: "Number", width: 14 },
+            { header: "Paid Days", key: "paidDays", type: "Number", width: 14 },
+            { header: "Advance (₹)", key: "advance", type: "Currency", width: 16 }
+        ];
+
+        employees.forEach(emp => {
+            const recKey = `${period.year}-${period.monthNum}-${emp.id}`;
+            const rec = monthlyPayrollRecords[recKey] || { paidDays: workingDays, advance: 0 };
+            dataRows.push({
+                code: emp.code || "",
+                name: emp.name || "",
+                monthDays: workingDays,
+                paidDays: rec.paidDays,
+                advance: rec.advance || 0
+            });
+        });
+    }
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = "Payroll Enterprise";
+        workbook.created = new Date();
+
+        const worksheet = workbook.addWorksheet(sheetTitle, { views: [{ showGridLines: true }] });
+        worksheet.columns = columnsConfig.map(col => ({ header: col.header, key: col.key, width: col.width }));
+
+        const headerRow = worksheet.getRow(1);
+        headerRow.height = 30;
+
+        headerRow.eachCell((cell) => {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            cell.border = {
+                top: { style: 'medium', color: { argb: 'FF0F172A' } },
+                bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+                left: { style: 'thin', color: { argb: 'FF334155' } },
+                right: { style: 'thin', color: { argb: 'FF334155' } }
+            };
+        });
+
+        dataRows.forEach((row, rowIndex) => {
+            const addedRow = worksheet.addRow(row);
+            addedRow.height = 24;
+            const isEven = rowIndex % 2 === 0;
+            const rowBgColor = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
+
+            addedRow.eachCell((cell, colNumber) => {
+                const colDef = columnsConfig[colNumber - 1];
+                cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF1E293B' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgColor } };
+
+                let hAlign = 'left';
+                if (colDef.type === 'Date' || colDef.type === 'DateTime' || colDef.key === 'status') {
+                    hAlign = 'center';
+                } else if (colDef.type === 'Currency' || colDef.type === 'Number') {
+                    hAlign = 'right';
+                    if (colDef.type === 'Currency') cell.numFmt = '₹#,##0';
+                }
+                cell.alignment = { vertical: 'middle', horizontal: hAlign };
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+                };
+            });
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        window.URL.revokeObjectURL(url);
+
+        showToast(`Template downloaded: ${fileName}`);
+    } catch (err) {
+        console.error("Template generation error:", err);
+        showToast("Error generating styled template!", "error");
+    }
+}
+
+function triggerExcelImport() {
+    toggleMasterOptionsDropdown();
+    const fileInput = document.getElementById('excel-import-input');
+    if (fileInput) {
+        fileInput.value = '';
+        fileInput.click();
+    }
+}
+
+function handleExcelImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async function(evt) {
+        try {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+            if (!rawRows || rawRows.length === 0) {
+                showToast("Selected Excel file is empty!", "error");
+                return;
+            }
+
+            const importedEmployees = [];
+            const normalizeHeader = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            rawRows.forEach((row) => {
+                const normalized = {};
+                Object.entries(row || {}).forEach(([key, value]) => { normalized[normalizeHeader(key)] = value; });
+                const pick = (...keys) => { for (const key of keys) { const value = normalized[normalizeHeader(key)]; if (value !== undefined && value !== null && String(value).trim() !== '') return value; } return ''; };
+                const payrollCode = String(pick('PAYROLL EMP CODE', 'Payroll Emp Code', 'Payroll Code', 'payroll_code', 'Payroll Employee Code', 'Employee Code')).trim().toUpperCase();
+                const code = String(pick('ORG Emp Code', 'Emp Code', 'Code', 'emp_code', 'Biometric Code') || payrollCode).trim().toUpperCase();
+                const name = String(pick('Name in Salary Sheet', 'Name of employee in Salary Sheet', 'Employee Name', 'Name', 'Employee')).trim();
+                if (!code && !name) return;
+                if (!code && name) {
+                    // Keep a stable non-empty internal key when importing a name-only row.
+                    return;
+                }
+
+                importedEmployees.push({
+                    code: code,
+                    payrollCode: payrollCode,
+                    status: String(pick("STATUS", "Status", "Employee Status") || "Active").trim(),
+                    name: name || code,
+                    designation: String(pick("Designation / Nature of Work done", "Designation", "Nature of Work") || "").trim(),
+                    dept: String(pick("Department", "Dept") || "Operations").trim(),
+                    fatherOrHusbandName: String(pick("Father/Husband Name", "FatherOrHusbandName", "Father Husband Name") || "").trim(),
+                    dob: formatDateToDDMMMYYYY(pick("Dob", "DOB", "Date of Birth")),
+                    doj: formatDateToDDMMMYYYY(pick("DOJ", "Doj", "Date of Joining")),
+                    dol: formatDateToDDMMMYYYY(pick("DOL", "Dol", "Date of Leaving")),
+                    uan: String(pick("UAN") || "").trim(),
+                    epfMemberId: String(pick("EPF Member ID", "EPF") || "").trim(),
+                    esicIpNumber: String(pick("ESIC IP Number", "ESIC") || "").trim(),
+                    bank: String(pick("Bank Name", "Bank") || "").trim(),
+                    acc: String(pick("Bank Account Number", "Account Number", "Bank Account") || "").trim(),
+                    ifsc: String(pick("IFSC", "IFSC Code") || "").trim().toUpperCase(),
+                    modeOfTransfer: String(pick("Mode of Transfer", "Transfer Mode") || "Bank Transfer").trim(),
+                    basicRate: parseFloat(pick("Monthly Basic Pay", "Basic Pay", "Basic", "Monthly Salary", "Monthly Salary Rate") || 0) || 0,
+                    splAllowance: parseFloat(pick("Special Allowance") || 0) || 0,
+                    cityAllow: parseFloat(pick("City Allowance") || 0) || 0,
+                    lastIncrement: String(pick("Last Increment") || "").trim()
+                });
+            });
+
+            if (importedEmployees.length === 0) {
+                showToast("No valid employee rows found in file!", "error");
+                return;
+            }
+
+            showToast(`Saving ${importedEmployees.length} records to database...`);
+            const response = await fetch('/api/employees/bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ employees: importedEmployees })
+            });
+
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status !== 'success') {
+                throw new Error(result.message || `Server could not save the employees (HTTP ${response.status}).`);
+            }
+
+            showToast(`Successfully processed ${result.count ?? importedEmployees.length} employees!`);
+            const masterSearch = document.getElementById('master-search');
+            if (masterSearch) masterSearch.value = '';
+            currentMasterSubTab = 'emp';
+            await fetchServerData();
+            switchTab('master');
+            switchMasterSubTab('emp');
+
+        } catch (err) {
+            console.error("Employee Excel import error:", err);
+            showToast(`Import failed: ${err.message || 'Please check the Excel file and server.'}`, "error");
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Helper: Retrieves Month & Year specific data for an employee
+function getSalaryMasterRecord(empOrId) {
+    const id = typeof empOrId === 'object' && empOrId ? empOrId.id : empOrId;
+    return salaryMaster.find(row => String(row.employeeId) === String(id)) || null;
+}
+
+function getSalaryMasterValues(emp) {
+    const row = getSalaryMasterRecord(emp);
+    return {
+        basicRate: row ? (Number(row.basicRate) || 0) : (Number(emp?.basicRate) || 0),
+        splAllowance: row ? (Number(row.splAllowance) || 0) : (Number(emp?.splAllowance) || 0),
+        cityAllow: row ? (Number(row.cityAllow) || 0) : (Number(emp?.cityAllow) || 0)
+    };
+}
+
+function getEmployeeMonthlyData(emp, rec, defaultDays = 31) {
+    const independentSalary = getSalaryMasterValues(emp);
+    return {
+        basicRate: (rec && rec.basicRate !== null && rec.basicRate !== undefined) ? rec.basicRate : independentSalary.basicRate,
+        splAllowance: (rec && rec.splAllowance !== null && rec.splAllowance !== undefined) ? rec.splAllowance : independentSalary.splAllowance,
+        cityAllow: (rec && rec.cityAllow !== null && rec.cityAllow !== undefined) ? rec.cityAllow : independentSalary.cityAllow,
+        deductShortTime: rec ? (rec.deductShortTime || 0) : 0,
+        overtimeArrear: rec ? (rec.overtimeArrear || 0) : 0,
+        penaltyLate: rec ? (rec.penaltyLate || 0) : 0,
+        advance: rec ? (rec.advance || 0) : 0,
+        paidDays: rec ? (rec.paidDays !== undefined ? rec.paidDays : defaultDays) : defaultDays
+    };
+}
+
+function calculateEmpPayroll(emp, workingDays, paidDays, rec) {
+    const mData = getEmployeeMonthlyData(emp, rec, workingDays);
+    const factor = workingDays > 0 ? Math.min(1, Math.max(0, paidDays / workingDays)) : 0;
+    
+    // 1. Gross Wages
+    const baseBasic = mData.basicRate;
+    const baseHra = Math.round((baseBasic * payrollConfig.hraRate) / 100);
+    const baseSpl = mData.splAllowance;
+    const baseCity = mData.cityAllow;
+    const baseTotalGross = baseBasic + baseHra + baseSpl + baseCity;
+
+    // 2. Amount Earned
+    const earnedBasic = Math.round(baseBasic * factor);
+    const earnedHra = Math.round((earnedBasic * payrollConfig.hraRate) / 100);
+    const earnedSpl = Math.round(baseSpl * factor);
+    const earnedCity = Math.round(baseCity * factor);
+    const earnedTotal = earnedBasic + earnedHra + earnedSpl + earnedCity;
+
+    // 3. Operational Adjustments
+    const deductShortTime = mData.deductShortTime;
+    const overtimeArrear = mData.overtimeArrear;
+    const penaltyLate = mData.penaltyLate;
+    
+    // Total Payable = Earned Wages + Overtime/Arrear - Short Time - Penalties
+    const totalPayable = Math.max(0, earnedTotal + overtimeArrear - deductShortTime - penaltyLate);
+
+    // 4. Statutory & Ledger Deductions
+    const advance = mData.advance;
+    const pf = Math.round((earnedBasic * payrollConfig.pfRate) / 100);
+    const eligibleWageForEsi = earnedTotal + overtimeArrear;
+    const esic = eligibleWageForEsi <= 21000 ? Math.round((eligibleWageForEsi * payrollConfig.esicRate) / 100) : 0;
+    const totalDeductions = advance + pf + esic;
+
+    // 5. Final Net Disbursed
+    const netSalary = Math.max(0, totalPayable - totalDeductions);
+    
+    return {
+        baseBasic, baseHra, baseSpl, baseCity, baseTotalGross,
+        earnedBasic, earnedHra, earnedSpl, earnedCity, earnedTotal,
+        deductShortTime, overtimeArrear, penaltyLate, totalPayable,
+        advance, pf, epf: pf, esic, totalDeductions, netSalary
+    };
+}
+
+// -------------------------------------------------------------
+// DYNAMIC TABLE RENDERING: MASTER DATA
+// -------------------------------------------------------------
+// Pending queue is backed by Salary Master 2; code assignment saves a row into this queue.
+function updatePendingEmployeeButton() {
+    const btn = document.getElementById('btn-pending-employees');
+    const label = document.getElementById('pending-employees-label');
+    const addBtn = document.getElementById('btn-master-add-employee');
+    const addSalary2Btn = document.getElementById('btn-master-add-salary2');
+    const bulkBtn = document.getElementById('btn-master-bulk-delete');
+    if (!btn || !label) return;
+    const pendingCount = salaryMaster2.filter(row => row.pendingEmployeeMaster && String(row.payrollEmpCode || '').trim()).length;
+    const isEmployeeMaster = currentMasterSubTab === 'emp';
+    const isSalary2 = currentMasterSubTab === 'salary2';
+    const isPendingView = isEmployeeMaster && employeeMasterViewMode === 'pending';
+    btn.classList.toggle('hidden', !(isEmployeeMaster && (isPendingView || pendingCount > 0)));
+    btn.classList.toggle('flex', isEmployeeMaster && (isPendingView || pendingCount > 0));
+    label.textContent = isPendingView ? 'Back to Employees Master' : `Pending Employees (${pendingCount})`;
+    if (addBtn) {
+        addBtn.classList.toggle('hidden', isPendingView || isSalary2);
+        addBtn.classList.toggle('flex', !isPendingView && !isSalary2);
+    }
+    if (addSalary2Btn) {
+        addSalary2Btn.classList.toggle('hidden', !isSalary2);
+        addSalary2Btn.classList.toggle('flex', isSalary2);
+    }
+    if (bulkBtn && isPendingView) bulkBtn.classList.add('hidden');
+}
+
+function togglePendingEmployeesView() {
+    if (currentMasterSubTab !== 'emp') {
+        switchMasterSubTab('emp');
+    }
+    employeeMasterViewMode = employeeMasterViewMode === 'pending' ? 'normal' : 'pending';
+    const titleEl = document.getElementById('master-view-title');
+    const subtitleEl = document.getElementById('master-view-subtitle');
+    const searchEl = document.getElementById('master-search');
+    if (searchEl) searchEl.value = '';
+    selectedEmployeeIds.clear();
+    if (employeeMasterViewMode === 'pending') {
+        if (titleEl) titleEl.innerText = 'Pending Employees';
+        if (subtitleEl) subtitleEl.innerText = 'Employees saved in Salary Master 2, awaiting addition to Employee Master.';
+    } else {
+        if (titleEl) titleEl.innerText = 'Employees Master';
+        if (subtitleEl) subtitleEl.innerText = 'Official employee directory, statutory and master records.';
+    }
+    renderMasterTable();
+}
+
+async function addPendingSalaryMaster2Employee(sNo, buttonEl) {
+    if (buttonEl) { buttonEl.disabled = true; buttonEl.textContent = 'Adding...'; }
+    try {
+        const response = await fetch(`/api/salary-master2/${encodeURIComponent(sNo)}/add-to-employee-master`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.status !== 'success') {
+            throw new Error(result.message || `Could not add employee (HTTP ${response.status})`);
+        }
+        await fetchServerData();
+        employeeMasterViewMode = 'pending';
+        const titleEl = document.getElementById('master-view-title');
+        const subtitleEl = document.getElementById('master-view-subtitle');
+        if (titleEl) titleEl.innerText = 'Pending Employees';
+        if (subtitleEl) subtitleEl.innerText = 'Employees saved in Salary Master 2, awaiting addition to Employee Master.';
+        renderMasterTable();
+        showToast(result.message || 'Employee added to Employee Master.');
+    } catch (err) {
+        console.error('Add pending employee failed:', err);
+        showToast(err.message || 'Could not add employee to Employee Master.', 'error');
+        if (buttonEl) { buttonEl.disabled = false; buttonEl.textContent = 'Add to Employee Master'; }
+    }
+}
+
+function renderMasterTable() {
+    const query = (document.getElementById('master-search')?.value || '').toLowerCase();
+    const thead = document.getElementById('master-thead');
+    const tbody = document.getElementById('master-tbody');
+    const tfoot = document.getElementById('master-tfoot');
+    if (!tbody || !thead) return;
+
+    tbody.innerHTML = '';
+    const period = getSelectedPeriod();
+
+    if (currentMasterSubTab === 'emp' && employeeMasterViewMode === 'pending') {
+        const pendingRows = salaryMaster2.filter(row => row.pendingEmployeeMaster && String(row.payrollEmpCode || '').trim());
+        const filteredPending = pendingRows.filter(row => {
+            const searchText = [row.sNo, row.payrollEmpCode, row.employeeName, row.designation, row.remarksStatus].map(v => String(v ?? '')).join(' ').toLowerCase();
+            return !query || searchText.includes(query);
+        });
+        thead.innerHTML = `<tr>
+            <th class="p-3 text-center border-b border-slate-800 bg-slate-900">S.N.</th>
+            <th class="p-3 border-b border-slate-800 bg-slate-900">Payroll Emp Code</th>
+            <th class="p-3 border-b border-slate-800 bg-slate-900 min-w-[220px]">Employee Name</th>
+            <th class="p-3 border-b border-slate-800 bg-slate-900">Designation</th>
+            <th class="p-3 text-right border-b border-slate-800 bg-slate-900">Monthly Salary / Rate (₹)</th>
+            <th class="p-3 border-b border-slate-800 bg-slate-900">Remarks / Status</th>
+            <th class="p-3 text-center border-b border-slate-800 bg-slate-900">Action</th>
+        </tr>`;
+        filteredPending.forEach(row => {
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-amber-50 border-b text-[12px]';
+            tr.innerHTML = `
+                <td class="p-3 text-center">${Number(row.sNo) || '-'}</td>
+                <td class="p-3 font-bold text-slate-800">${escapeSalaryMaster2Html(row.payrollEmpCode || '-')}</td>
+                <td class="p-3 font-bold text-slate-900">${escapeSalaryMaster2Html(row.employeeName || '-')}</td>
+                <td class="p-3 text-slate-700">${escapeSalaryMaster2Html(row.designation || '-')}</td>
+                <td class="p-3 text-right font-bold text-emerald-700">₹${(Number(row.monthlyRate) || 0).toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                <td class="p-3 text-slate-600">${escapeSalaryMaster2Html(row.remarksStatus || '-')}</td>
+                <td class="p-2 text-center"><button onclick="addPendingSalaryMaster2Employee(${Number(row.sNo)}, this)" class="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white font-bold transition">Add to Employee Master</button></td>`;
+            tbody.appendChild(tr);
+        });
+        if (tfoot) {
+            tfoot.classList.remove('hidden');
+            tfoot.innerHTML = `<tr class="bg-slate-100 border-t-2 border-slate-300"><td colspan="7" class="p-3 text-slate-700 font-semibold text-xs">Pending Employees: <span class="font-extrabold text-amber-700">${filteredPending.length}</span> shown · <span class="text-slate-500">ORG Emp Code is kept internal for matching.</span></td></tr>`;
+        }
+        updatePendingEmployeeButton();
+        const bulkBtn = document.getElementById('btn-master-bulk-delete');
+        if (bulkBtn) bulkBtn.classList.add('hidden');
+        syncSelectAllCheckbox();
+        updateBulkDeleteBtnState();
+        return;
+    }
+
+    if (currentMasterSubTab === 'emp') {
+        const activeDefs = masterFieldDefinitions.filter(f => activeEmployeeColumnIds.includes(f.id));
+
+        let thColsHtml = activeDefs.map(def => {
+            const alignClass = def.type === 'Date' || def.id === 'status' ? 'text-center' : (def.type === 'Currency' ? 'text-right' : 'text-left');
+            return `<th class="p-3 border-b border-slate-800 bg-slate-900 ${alignClass}">${def.label}</th>`;
+        }).join('');
+
+        thead.innerHTML = `
+            <tr>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 sticky left-0 z-30 w-10">
+                    <input type="checkbox" id="master-select-all-cb" onchange="toggleSelectAllEmployees(this.checked)" class="rounded text-sky-600 cursor-pointer">
+                </th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 sticky left-10 z-30 w-12">S.N.</th>
+                ${thColsHtml}
+                <th class="p-3 border-b border-slate-800 text-center sticky right-0 bg-slate-900 shadow-md z-30">
+                    <div class="flex items-center justify-center gap-2">
+                        <span>Actions</span>
+                        <button id="th-3dots-btn" type="button" onclick="toggleColumnContextMenu(event, this)" class="w-6 h-6 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 hover:text-white transition flex items-center justify-center cursor-pointer border border-slate-700" title="Column Options">
+                            <i class="fa-solid fa-ellipsis-vertical text-xs pointer-events-none"></i>
+                        </button>
+                    </div>
+                </th>
+            </tr>`;
+
+        employees.forEach((emp, index) => {
+            if (query && !String(emp.name || '').toLowerCase().includes(query) && !String(emp.code || '').toLowerCase().includes(query) && !String(emp.fatherOrHusbandName || '').toLowerCase().includes(query)) return;
+
+            let rowCellsHtml = activeDefs.map(def => {
+                const val = emp[def.id];
+                if (def.id === 'status') {
+                    const statusColor = val === 'Active' ? 'bg-emerald-100 text-emerald-800' : (val === 'Left' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700');
+                    return `<td class="p-3 text-center"><span class="${statusColor} px-2.5 py-0.5 rounded-full text-[10px] font-bold">${val || 'Active'}</span></td>`;
+                } else if (def.id === 'name') {
+                    return `<td class="p-3 font-bold text-slate-900">${val || '-'}</td>`;
+                } else if (def.id === 'code') {
+                    return `<td class="p-3 font-bold text-slate-800">${val || '-'}</td>`;
+                } else if (def.id === 'modeOfTransfer') {
+                    return `<td class="p-3 text-center"><span class="bg-sky-100 text-sky-800 px-2 py-0.5 rounded-md text-[10px] font-bold">${val || 'Bank Transfer'}</span></td>`;
+                } else if (def.type === 'Currency') {
+                    return `<td class="p-3 text-right font-semibold text-slate-800">₹${(val || 0).toLocaleString('en-IN')}</td>`;
+                } else if (def.type === 'DateTime') {
+                    return `<td class="p-3 text-center font-mono text-[11px] text-slate-500 bg-slate-50/60">${val || '-'}</td>`;
+                } else if (def.type === 'Date') {
+                    return `<td class="p-3 text-center font-semibold text-slate-700">${formatDateToDDMMMYYYY(val)}</td>`;
+                } else if (def.id === 'uan' || def.id === 'acc' || def.id === 'ifsc' || def.id === 'epfMemberId' || def.id === 'esicIpNumber') {
+                    return `<td class="p-3 font-mono text-slate-700">${val || '-'}</td>`;
+                } else {
+                    return `<td class="p-3 text-slate-700">${val || '-'}</td>`;
+                }
+            }).join('');
+
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-slate-50 border-b text-[12px]";
+            tr.innerHTML = `
+                <td class="p-3 text-center sticky left-0 bg-white z-10 w-10">
+                    <input type="checkbox" ${selectedEmployeeIds.has(emp.id) ? 'checked' : ''} onchange="toggleEmployeeSelection('${emp.id}', this.checked)" class="rounded text-sky-600 cursor-pointer">
+                </td>
+                <td class="p-3 text-center font-medium sticky left-10 bg-white z-10 w-12">${index + 1}</td>
+                ${rowCellsHtml}
+                <td class="p-3 text-center sticky right-0 bg-white/95 backdrop-blur-xs shadow-md z-10">
+                    <div class="flex items-center justify-center gap-1.5">
+                        <button onclick="editEmployee('${emp.id}', currentMasterSubTab)" class="w-7 h-7 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition inline-flex items-center justify-center" title="Edit Employee">
+                            <i class="fa-solid fa-pen-to-square"></i>
+                        </button>
+                        <button onclick="deleteEmployee('${emp.id}')" class="w-7 h-7 rounded bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white transition inline-flex items-center justify-center" title="Delete">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+
+        if (tfoot) {
+            tfoot.classList.remove('hidden');
+            tfoot.innerHTML = `
+                <tr class="bg-slate-100 border-t-2 border-slate-300">
+                    <td colspan="${activeDefs.length + 2}" class="p-3 text-slate-700 font-semibold text-xs">
+                        Total Staff: <span class="font-extrabold text-indigo-700 text-sm">${employees.length}</span> Records in Directory
+                    </td>
+                </tr>`;
+        }
+
+    } else if (currentMasterSubTab === 'salary') {
+        thead.innerHTML = `
+            <tr class="bg-slate-900 text-white">
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-10 sticky left-0 z-30"><input type="checkbox" id="master-select-all-cb" onchange="toggleSelectAllEmployees(this.checked)" class="rounded text-sky-600 cursor-pointer" aria-label="Select all Salary Master records"></th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-14 sticky left-10 z-30">S.N.</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 w-24 sticky left-20 z-30">Emp Code</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 min-w-[200px] sticky left-36 z-30">Name</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-slate-900 min-w-[130px]">Basic Pay</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-slate-900 min-w-[130px]">Special Allow.</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-slate-900 min-w-[130px]">City Allow.</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-slate-900 min-w-[130px]">Est. HRA (${payrollConfig.hraRate}%)</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-indigo-950 font-bold text-indigo-200 min-w-[140px]">Base Gross</th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-20 sticky right-0 z-30 shadow-md">Actions</th>
+            </tr>`;
+        let totalBasic = 0, totalSpl = 0, totalCity = 0, totalHra = 0, totalGross = 0;
+        const visibleRows = salaryMaster.filter(row => {
+            const text = [row.empCode, row.payrollCode, row.name].map(v => String(v || '')).join(' ').toLowerCase();
+            return !query || text.includes(query);
+        });
+        visibleRows.forEach((row, index) => {
+            const empId = String(row.employeeId);
+            const basicRate = Number(row.basicRate) || 0;
+            const splAllowance = Number(row.splAllowance) || 0;
+            const cityAllow = Number(row.cityAllow) || 0;
+            const estHra = Math.round((basicRate * payrollConfig.hraRate) / 100);
+            const totalBase = basicRate + splAllowance + cityAllow + estHra;
+            totalBasic += basicRate; totalSpl += splAllowance; totalCity += cityAllow; totalHra += estHra; totalGross += totalBase;
+            const safeId = empId.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 border-b text-[12px]';
+            tr.innerHTML = `
+                <td class="p-3 text-center sticky left-0 bg-white z-10 w-10"><input type="checkbox" ${selectedEmployeeIds.has(empId) ? 'checked' : ''} onchange="toggleEmployeeSelection('${safeId}', this.checked)" class="rounded text-sky-600 cursor-pointer" aria-label="Select Salary Master employee"></td>
+                <td class="p-3 text-center font-medium sticky left-10 bg-white z-10 w-12">${index + 1}</td>
+                <td class="p-3 font-bold text-slate-800 sticky left-20 bg-white z-10">${escapeSalaryMaster2Html(row.empCode || '-')}</td>
+                <td class="p-3 font-bold text-slate-900 sticky left-36 bg-white z-10">${escapeSalaryMaster2Html(row.name || '-')}</td>
+                <td class="p-3 text-right font-bold text-emerald-700">₹${basicRate.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                <td class="p-3 text-right font-semibold text-slate-800">₹${splAllowance.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                <td class="p-3 text-right font-semibold text-slate-800">₹${cityAllow.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                <td class="p-3 text-right text-slate-600">₹${estHra.toLocaleString('en-IN')}</td>
+                <td class="p-3 text-right font-extrabold text-indigo-700 bg-indigo-50/50">₹${totalBase.toLocaleString('en-IN', {maximumFractionDigits: 2})}</td>
+                <td class="p-3 text-center sticky right-0 bg-white z-10 shadow-md"><button onclick="openSalaryMasterEditModal('${safeId}')" class="w-7 h-7 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition inline-flex items-center justify-center" title="Edit Salary Only"><i class="fa-solid fa-pen-to-square"></i></button></td>`;
+            tbody.appendChild(tr);
+        });
+        if (tfoot) {
+            tfoot.classList.remove('hidden');
+            tfoot.innerHTML = `<tr class="bg-slate-100 border-t-2 border-slate-300"><td colspan="4" class="p-3 text-slate-700 font-semibold text-xs">Salary Master: <span class="font-extrabold text-indigo-700">${visibleRows.length}</span> records · independent salary table</td><td class="p-3 text-right font-extrabold text-emerald-700">₹${totalBasic.toLocaleString('en-IN')}</td><td class="p-3 text-right">₹${totalSpl.toLocaleString('en-IN')}</td><td class="p-3 text-right">₹${totalCity.toLocaleString('en-IN')}</td><td class="p-3 text-right">₹${totalHra.toLocaleString('en-IN')}</td><td class="p-3 text-right font-extrabold text-indigo-700">₹${totalGross.toLocaleString('en-IN')}</td><td></td></tr>`;
+        }
+        updateBulkDeleteBtnState();
+
+    } else if (currentMasterSubTab === 'bank') {
+        thead.innerHTML = `
+            <tr>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 sticky left-0 z-30 w-10">
+                    <input type="checkbox" id="master-select-all-cb" onchange="toggleSelectAllEmployees(this.checked)" class="rounded text-sky-600 cursor-pointer">
+                </th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 sticky left-10 z-30 w-12">S.N.</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 sticky left-14 z-30">Emp Code</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 sticky left-36 z-30">Name</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">Bank Name</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">Account Number</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">IFSC Code</th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900">Mode of Transfer</th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 sticky right-0 z-30 shadow-md">Actions</th>
+            </tr>`;
+
+        employees.forEach((emp, index) => {
+            if (query && !emp.name.toLowerCase().includes(query) && !emp.code.toLowerCase().includes(query)) return;
+            const tr = document.createElement('tr');
+            tr.className = "hover:bg-slate-50 border-b text-[12px]";
+            tr.innerHTML = `
+                <td class="p-3 text-center sticky left-0 bg-white z-10 w-10">
+                    <input type="checkbox" ${selectedEmployeeIds.has(emp.id) ? 'checked' : ''} onchange="toggleEmployeeSelection('${emp.id}', this.checked)" class="rounded text-sky-600 cursor-pointer">
+                </td>
+                <td class="p-3 text-center font-medium sticky left-10 bg-white z-10 w-12">${index + 1}</td>
+                <td class="p-3 font-bold text-slate-800 sticky left-14 bg-white z-10">${emp.code}</td>
+                <td class="p-3 font-bold text-slate-900 sticky left-36 bg-white z-10">${emp.name}</td>
+                <td class="p-3 font-medium text-slate-800">${emp.bank || '-'}</td>
+                <td class="p-3 font-mono text-slate-700">${emp.acc || '-'}</td>
+                <td class="p-3 font-mono text-slate-600">${emp.ifsc || '-'}</td>
+                <td class="p-3 text-center"><span class="bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full text-[10px] font-bold">${emp.modeOfTransfer || 'Bank Transfer'}</span></td>
+                <td class="p-3 text-center sticky right-0 bg-white z-10 shadow-md">
+                    <button onclick="editEmployee('${emp.id}', currentMasterSubTab)" class="w-7 h-7 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition inline-flex items-center justify-center">
+                        <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+
+        if (tfoot) {
+            tfoot.classList.remove('hidden');
+            tfoot.innerHTML = `
+                <tr class="bg-slate-100 border-t-2 border-slate-300">
+                    <td colspan="8" class="p-3 text-slate-700 font-semibold text-xs">
+                        Total Staff Banking Accounts: <span class="font-extrabold text-indigo-700">${employees.length}</span>
+                    </td>
+                </tr>`;
+        }
+
+    } else if (currentMasterSubTab === 'salary2') {
+        thead.innerHTML = `
+            <tr>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900 w-10"><input type="checkbox" id="master-select-all-cb" onchange="toggleSelectAllSalaryMaster2(this.checked)" class="rounded text-sky-600 cursor-pointer" aria-label="Select all Salary Master 2 rows"></th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900">S.No.</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">ORG Emp Code</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">Payroll Emp Code</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 min-w-[220px]">Employee Name</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900">Designation</th>
+                <th class="p-3 text-right border-b border-slate-800 bg-slate-900 min-w-[180px]">Monthly Salary / Rate (₹)</th>
+                <th class="p-3 border-b border-slate-800 bg-slate-900 min-w-[180px]">Remarks / Status</th>
+                <th class="p-3 text-center border-b border-slate-800 bg-slate-900">Action</th>
+            </tr>`;
+
+        let visibleSalaryRows = 0;
+        let visibleSalaryTotal = 0;
+        salaryMaster2.forEach((row) => {
+            const searchText = [row.sNo, row.orgEmpCode, row.payrollEmpCode, row.employeeName, row.designation, row.remarksStatus]
+                .map(v => String(v ?? '')).join(' ').toLowerCase();
+            if (query && !searchText.includes(query)) return;
+            visibleSalaryRows++;
+            visibleSalaryTotal += Number(row.monthlyRate) || 0;
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50 border-b text-[12px]';
+            const salaryRowId = Number(row.sNo);
+            tr.innerHTML = `
+                <td class="p-3 text-center"><input type="checkbox" ${selectedSalaryMaster2Ids.has(salaryRowId) ? 'checked' : ''} onchange="toggleSalaryMaster2Selection(${salaryRowId}, this.checked)" class="rounded text-sky-600 cursor-pointer" aria-label="Select Salary Master 2 row ${salaryRowId}"></td>
+                <td class="p-3 text-center font-medium">${salaryRowId || '-'}</td>
+                <td class="p-3 font-bold text-slate-700">${escapeSalaryMaster2Html(row.orgEmpCode || '-')}</td>
+                <td class="p-2"><input id="sm2-payroll-${Number(row.sNo)}" value="${escapeSalaryMaster2Html(row.payrollEmpCode || '')}" oninput="updateSalaryMaster2SaveVisibility(${Number(row.sNo)})" placeholder="Enter code" ${String(row.payrollEmpCode || '').trim() ? 'readonly' : ''} class="w-32 p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 ${String(row.payrollEmpCode || '').trim() ? 'bg-slate-100 text-slate-500' : ''}" aria-label="Payroll Emp Code"></td>
+                <td class="p-3 font-bold text-slate-900">${escapeSalaryMaster2Html(row.employeeName || '-')}</td>
+                <td class="p-3 text-slate-700">${escapeSalaryMaster2Html(row.designation || '-')}</td>
+                <td class="p-2 text-right"><input type="number" min="0" step="0.01" id="sm2-rate-${Number(row.sNo)}" value="${Number(row.monthlyRate) || 0}" ${String(row.payrollEmpCode || '').trim() ? 'readonly' : ''} class="w-36 p-2 text-right border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 ${String(row.payrollEmpCode || '').trim() ? 'bg-slate-100 text-slate-500' : ''}" aria-label="Monthly Salary / Rate"></td>
+                <td class="p-2"><input id="sm2-remarks-${Number(row.sNo)}" value="${escapeSalaryMaster2Html(row.remarksStatus || '')}" ${String(row.payrollEmpCode || '').trim() ? 'readonly' : ''} class="w-40 p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 ${String(row.payrollEmpCode || '').trim() ? 'bg-slate-100 text-slate-500' : ''}" aria-label="Remarks / Status"></td>
+                <td class="p-2 text-center"><div class="flex flex-col items-center gap-1"><button type="button" onclick="openSalaryMaster2Modal(${Number(row.sNo)})" class="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-600 hover:text-white font-bold transition"><i class="fa-solid fa-pen-to-square mr-1"></i>Edit</button><button id="sm2-save-${Number(row.sNo)}" onclick="saveSalaryMaster2Row(${Number(row.sNo)})" class="hidden px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white font-bold transition">Save</button><span id="sm2-code-hint-${Number(row.sNo)}" class="${String(row.payrollEmpCode || '').trim() ? 'hidden' : ''} max-w-[170px] whitespace-normal text-[10px] leading-tight text-amber-700">Please fill the Payroll Emp Code for this employee to enable Save.</span></div></td>`;
+            tbody.appendChild(tr);
+        });
+
+        if (tfoot) {
+            tfoot.classList.remove('hidden');
+            tfoot.innerHTML = `
+                <tr class="bg-slate-100 border-t-2 border-slate-300">
+                    <td colspan="9" class="p-3 text-slate-700 font-semibold text-xs">
+                        Salary Master 2: <span class="font-extrabold text-indigo-700 text-sm">${visibleSalaryRows}</span> records shown · Total monthly rate: <span class="font-extrabold text-emerald-700">₹${visibleSalaryTotal.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>
+                    </td>
+                </tr>`;
+        }
+    }
+    syncSelectAllCheckbox();
+    updateBulkDeleteBtnState();
+}
+
+function openSalaryMaster2Modal(sNo = null) {
+    const form = document.getElementById('salary-master2-form');
+    const row = sNo === null || sNo === undefined ? null : salaryMaster2.find(item => Number(item.sNo) === Number(sNo));
+    if (sNo !== null && sNo !== undefined && !row) {
+        showToast('Salary Master 2 record not found.', 'error');
+        return;
+    }
+    salaryMaster2EditingSNo = row ? Number(row.sNo) : null;
+    form?.reset();
+    const setValue = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? ''; };
+    setValue('sm2-form-s-no', row ? row.sNo : '');
+    setValue('sm2-form-org-code', row ? row.orgEmpCode : '');
+    setValue('sm2-form-payroll-code', row ? row.payrollEmpCode : '');
+    setValue('sm2-form-name', row ? row.employeeName : '');
+    setValue('sm2-form-designation', row ? row.designation : '');
+    setValue('sm2-form-rate', row ? (row.monthlyRate || 0) : 0);
+    setValue('sm2-form-remarks', row ? row.remarksStatus : 'Active');
+    const title = document.getElementById('sm2-modal-title');
+    if (title) title.innerHTML = row
+        ? '<i class="fa-solid fa-user-pen text-teal-600 mr-2"></i>Edit Salary Master 2 Record'
+        : '<i class="fa-solid fa-user-plus text-teal-600 mr-2"></i>Add Salary Master 2 Record';
+    const submit = document.getElementById('sm2-form-submit');
+    if (submit) submit.textContent = row ? 'Save Changes' : 'Insert Record';
+    document.getElementById('salary-master2-modal')?.classList.remove('hidden');
+}
+
+function closeSalaryMaster2Modal() {
+    document.getElementById('salary-master2-modal')?.classList.add('hidden');
+    salaryMaster2EditingSNo = null;
+}
+
+async function submitSalaryMaster2Form(event) {
+    event.preventDefault();
+    const payload = {
+        orgEmpCode: String(document.getElementById('sm2-form-org-code')?.value || '').trim().toUpperCase(),
+        payrollEmpCode: String(document.getElementById('sm2-form-payroll-code')?.value || '').trim().toUpperCase(),
+        employeeName: String(document.getElementById('sm2-form-name')?.value || '').trim().toUpperCase(),
+        designation: String(document.getElementById('sm2-form-designation')?.value || '').trim().toUpperCase(),
+        monthlyRate: Number(document.getElementById('sm2-form-rate')?.value || 0),
+        remarksStatus: String(document.getElementById('sm2-form-remarks')?.value || '').trim()
+    };
+    if (!payload.orgEmpCode) { showToast('Please enter the ORG Emp Code.', 'error'); document.getElementById('sm2-form-org-code')?.focus(); return; }
+    if (!payload.employeeName) { showToast('Please enter the Employee Name.', 'error'); document.getElementById('sm2-form-name')?.focus(); return; }
+    if (!Number.isFinite(payload.monthlyRate) || payload.monthlyRate < 0) { showToast('Please enter a valid monthly rate.', 'error'); return; }
+    const isEdit = salaryMaster2EditingSNo !== null;
+    const url = isEdit ? `/api/salary-master2/${encodeURIComponent(salaryMaster2EditingSNo)}` : '/api/salary-master2';
+    if (isEdit) payload.editExisting = true;
+    const submit = document.getElementById('sm2-form-submit');
+    if (submit) { submit.disabled = true; submit.textContent = isEdit ? 'Saving...' : 'Inserting...'; }
+    try {
+        const response = await fetch(url, {
+            method: isEdit ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.status !== 'success') throw new Error(result.message || `Request failed (HTTP ${response.status})`);
+        closeSalaryMaster2Modal();
+        selectedSalaryMaster2Ids.clear();
+        await fetchServerData();
+        switchMasterSubTab('salary2');
+        showToast(isEdit ? 'Salary Master 2 record updated successfully.' : `Salary Master 2 record inserted (S.No. ${result.sNo}).`);
+    } catch (err) {
+        console.error('Salary Master 2 insert/edit failed:', err);
+        showToast(err.message || 'Could not save Salary Master 2 record.', 'error');
+    } finally {
+        if (submit) { submit.disabled = false; submit.textContent = isEdit ? 'Save Changes' : 'Insert Record'; }
+    }
+}
+
+function escapeSalaryMaster2Html(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function updateSalaryMaster2SaveVisibility(sNo) {
+    const payrollEl = document.getElementById(`sm2-payroll-${sNo}`);
+    const saveBtn = document.getElementById(`sm2-save-${sNo}`);
+    const hint = document.getElementById(`sm2-code-hint-${sNo}`);
+    if (!payrollEl || !saveBtn) return;
+    const hasCode = Boolean(payrollEl.value.trim());
+    saveBtn.classList.toggle('hidden', !hasCode);
+    if (hint) hint.classList.toggle('hidden', hasCode);
+}
+
+async function saveSalaryMaster2Row(sNo) {
+    const payrollEl = document.getElementById(`sm2-payroll-${sNo}`);
+    const rateEl = document.getElementById(`sm2-rate-${sNo}`);
+    const remarksEl = document.getElementById(`sm2-remarks-${sNo}`);
+    if (!payrollEl || !rateEl || !remarksEl) return;
+    if (!payrollEl.value.trim()) {
+        showToast('Please fill the Payroll Emp Code for this employee.', 'error');
+        payrollEl.focus();
+        return;
+    }
+    const monthlyRate = Number(rateEl.value);
+    if (!Number.isFinite(monthlyRate) || monthlyRate < 0) {
+        showToast('Please enter a valid non-negative monthly rate.', 'error');
+        rateEl.focus();
+        return;
+    }
+    try {
+        const response = await fetch(`/api/salary-master2/${encodeURIComponent(sNo)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                payrollEmpCode: payrollEl.value.trim(),
+                monthlyRate,
+                remarksStatus: remarksEl.value.trim()
+            })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.status !== 'success') {
+            throw new Error(result.message || `Save failed (HTTP ${response.status})`);
+        }
+        await fetchServerData();
+        showToast(`Salary Master 2 row ${sNo} saved successfully. It is now available under Employee Master > Pending Employees.`);
+    } catch (err) {
+        console.error('Salary Master 2 save failed:', err);
+        showToast(err.message || 'Could not save Salary Master 2 row.', 'error');
+    }
+}
+
+// -------------------------------------------------------------
+// SALARY DATA: DYNAMIC MONTH-WISE MATRIX GRID GENERATOR
+// -------------------------------------------------------------
+const salarySubTabMeta = {
+    basic_da: { title: "Basic +DA", key: "basicRate", editable: true, subtitle: "Monthly Base Pay and Dearness Allowance structure." },
+    hra: { title: "HRA", key: "hra", editable: false, subtitle: "House Rent Allowance calculated on 40% of basic rate." },
+    spl_allow: { title: "Special Allow", key: "splAllowance", editable: true, subtitle: "Monthly special allowance and operational bonuses." },
+    city_allow: { title: "City Allow", key: "cityAllow", editable: true, subtitle: "City compensatory allowance for metro staff." },
+    deduct_short: { title: "Deduction For Short Time", key: "deductShortTime", editable: true, subtitle: "Statutory deduction for missed shift hours." },
+    ot_arrear: { title: "Overtime / Arrear", key: "overtimeArrear", editable: true, subtitle: "Disbursable overtime payout and retroactive arrears." },
+    penalty: { title: "Penalty For Uniform & Late Entry", key: "penaltyLate", editable: true, subtitle: "HR penalties for policy non-compliance and tardiness." },
+    advance: { title: "Advance", key: "advance", editable: true, subtitle: "Salary advance repayments recorded for this month." },
+    pf: { title: "PF", key: "pf", editable: false, subtitle: "Employee Provident Fund (12%) deduction on earned basic." },
+    esi: { title: "ESI", key: "esic", editable: false, subtitle: "Employee State Insurance (0.75%) on eligible gross salary." },
+    epf: { title: "EPF", key: "epf", editable: false, subtitle: "Employees' Provident Fund statutory contribution ledger." }
+};
+
+function getSalaryMatrixMonths() {
+    if (biometricMonths.length > 0) {
+        const sorted = [...biometricMonths].sort((a, b) => (a.year - b.year) || (a.month - b.month));
+        return sorted.map(bm => ({
+            label: `${bm.monthName.slice(0, 3).toUpperCase()}-${String(bm.year).slice(-2)}`,
+            year: bm.year,
+            monthNum: bm.month,
+            monthName: bm.monthName
+        }));
+    }
+    return [];
+}
+
+function renderSalaryDataTable() {
+    const meta = salarySubTabMeta[currentSalarySubTab] || salarySubTabMeta.basic_da;
+
+    document.getElementById('salary-data-title').innerText = `${meta.title} Matrix`;
+    document.getElementById('salary-data-subtitle').innerText = `${meta.subtitle}`;
+
+    const query = (document.getElementById('salary-data-search')?.value || '').toLowerCase();
+    const thead = document.getElementById('salary-data-thead');
+    const tbody = document.getElementById('salary-data-tbody');
+    const tfoot = document.getElementById('salary-data-tfoot');
+    if (!tbody || !thead) return;
+
+    tbody.innerHTML = '';
+    const months = getSalaryMatrixMonths();
+
+    if (months.length === 0) {
+        thead.innerHTML = `
+            <tr class="bg-slate-900 text-white">
+                <th class="p-3 text-center border-r border-slate-700 w-12">Sr. No.</th>
+                <th class="p-3 text-center border-r border-slate-700 w-24">Emp Code</th>
+                <th class="p-3 border-r border-slate-700">Name of employee</th>
+                <th class="p-3 text-center">Status</th>
+            </tr>
+        `;
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="4" class="p-8 text-center text-slate-500 font-semibold bg-slate-50">
+                    <div class="flex flex-col items-center justify-center gap-2">
+                        <i class="fa-solid fa-fingerprint text-3xl text-cyan-500 mb-1"></i>
+                        <p class="text-sm font-bold text-slate-700">No Biometric Month Record Available</p>
+                        <p class="text-xs text-slate-400">Please insert monthly biometric data in the Biometric Data tab to view columns.</p>
+                        <button onclick="switchTab('biometric')" class="mt-2 bg-cyan-600 hover:bg-cyan-700 text-white font-bold px-4 py-1.5 rounded-xl text-xs transition cursor-pointer">Go to Biometric Data Tab</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+        if (tfoot) tfoot.innerHTML = '';
+        return;
+    }
+
+    let monthThs = months.map(m => `<th class="p-2.5 border border-slate-700 text-right min-w-[95px]">${m.label}</th>`).join('');
+
+    thead.innerHTML = `
+        <tr class="bg-slate-900 text-white">
+            <th class="p-2.5 border border-slate-700 text-center w-12 sticky left-0 bg-slate-900 z-30">Sr. No.</th>
+            <th class="p-2.5 border border-slate-700 text-center w-20 sticky left-12 bg-slate-900 z-30">Emp Code</th>
+            <th class="p-2.5 border border-slate-700 min-w-[200px] sticky left-32 bg-slate-900 z-30">Name of employee</th>
+            <th class="p-2.5 border border-slate-700 text-center w-28">Last Increment</th>
+            <th class="p-2.5 border border-slate-700 min-w-[170px]">Designation / Nature of Work done</th>
+            ${monthThs}
+            <th class="p-2.5 border border-slate-700 text-right bg-teal-950/80 text-teal-300 font-bold min-w-[110px]">Total / Avg</th>
+        </tr>
+    `;
+
+    let monthTotals = new Array(months.length).fill(0);
+    let grandTotalSum = 0;
+    let count = 0;
+
+    employees.forEach((emp, index) => {
+        if (query && !emp.name.toLowerCase().includes(query) && !emp.code.toLowerCase().includes(query) && !(emp.designation || '').toLowerCase().includes(query)) {
+            return;
+        }
+
+        count++;
+        let rowSum = 0;
+
+        let monthCellsHtml = months.map((m, mIndex) => {
+            const recKey = `${m.year}-${m.monthNum}-${emp.id}`;
+            const rec = monthlyPayrollRecords[recKey] || null;
+            const res = calculateEmpPayroll(emp, 31, (rec ? rec.paidDays : 31), rec);
+
+            let val = 0;
+            if (currentSalarySubTab === 'basic_da') val = res.baseBasic;
+            else if (currentSalarySubTab === 'hra') val = res.earnedHra;
+            else if (currentSalarySubTab === 'spl_allow') val = res.baseSpl;
+            else if (currentSalarySubTab === 'city_allow') val = res.baseCity;
+            else if (currentSalarySubTab === 'deduct_short') val = res.deductShortTime;
+            else if (currentSalarySubTab === 'ot_arrear') val = res.overtimeArrear;
+            else if (currentSalarySubTab === 'penalty') val = res.penaltyLate;
+            else if (currentSalarySubTab === 'advance') val = res.advance;
+            else if (currentSalarySubTab === 'pf') val = res.pf;
+            else if (currentSalarySubTab === 'esi') val = res.esic;
+            else if (currentSalarySubTab === 'epf') val = res.epf || res.pf;
+
+            rowSum += val;
+            monthTotals[mIndex] += val;
+
+            if (meta.editable) {
+                return `
+                    <td class="p-1.5 border border-slate-200 text-right bg-white hover:bg-teal-50/50">
+                        <input type="number" value="${val}" min="0" onchange="updateMonthMatrixCell('${emp.id}', '${meta.key}', ${m.year}, ${m.monthNum}, this.value)" class="w-full text-right p-1 font-bold text-slate-800 bg-transparent border-0 focus:ring-1 focus:ring-teal-500 rounded text-xs">
+                    </td>
+                `;
+            } else {
+                return `
+                    <td class="p-2 border border-slate-200 text-right font-semibold text-slate-700 bg-slate-50/50">
+                        ₹${val.toLocaleString('en-IN')}
+                    </td>
+                `;
+            }
+        }).join('');
+
+        grandTotalSum += rowSum;
+
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 border-b text-[12px]";
+        tr.innerHTML = `
+            <td class="p-2.5 border border-slate-200 text-center font-medium sticky left-0 bg-white z-10">${index + 1}</td>
+            <td class="p-2.5 border border-slate-200 text-center font-bold text-slate-800 sticky left-12 bg-white z-10">${emp.code}</td>
+            <td class="p-2.5 border border-slate-200 font-bold text-slate-900 sticky left-32 bg-white z-10">${emp.name}</td>
+            <td class="p-2.5 border border-slate-200 text-center font-medium text-slate-600">${emp.lastIncrement || '-'}</td>
+            <td class="p-2.5 border border-slate-200 text-slate-600">${emp.designation || '-'}</td>
+            ${monthCellsHtml}
+            <td class="p-2.5 border border-slate-200 text-right font-black text-teal-800 bg-teal-50">
+                ₹${rowSum.toLocaleString('en-IN')}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    if (tfoot) {
+        let monthTotalTds = monthTotals.map(t => `<td class="p-2.5 border border-slate-300 text-right font-extrabold text-slate-900">₹${t.toLocaleString('en-IN')}</td>`).join('');
+        tfoot.innerHTML = `
+            <tr class="bg-slate-200 border-t-2 border-slate-400">
+                <td colspan="5" class="p-2.5 border border-slate-300 text-right uppercase font-black text-slate-900 sticky left-0 bg-slate-200 z-10">
+                    TOTAL (${count} Staff):
+                </td>
+                ${monthTotalTds}
+                <td class="p-2.5 border border-slate-300 text-right font-black text-teal-900 bg-teal-200 text-sm">
+                    ₹${grandTotalSum.toLocaleString('en-IN')}
+                </td>
+            </tr>
+        `;
+    }
+}
+
+async function updateMonthMatrixCell(empId, fieldKey, year, monthNum, val) {
+    const recKey = `${year}-${monthNum}-${empId}`;
+    const numVal = parseFloat(val) || 0;
+
+    if (!monthlyPayrollRecords[recKey]) {
+        monthlyPayrollRecords[recKey] = { paidDays: 31, advance: 0 };
+    }
+    monthlyPayrollRecords[recKey][fieldKey] = numVal;
+
+    await fetch('/api/monthly_record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: recKey, field: fieldKey, value: numVal })
+    });
+
+    renderSalaryDataTable();
+    renderSalarySheet();
+    renderSalarySheetCalc();
+    showToast(`Updated for ${year}-${monthNum}!`);
+}
+
+async function exportSalaryMatrixToExcel() {
+    const meta = salarySubTabMeta[currentSalarySubTab] || salarySubTabMeta.basic_da;
+    const months = getSalaryMatrixMonths();
+
+    if (months.length === 0) {
+        showToast("No active biometric months to export!", "error");
+        return;
+    }
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = "Payroll Management";
+        const worksheet = workbook.addWorksheet(meta.title.slice(0, 30), { views: [{ showGridLines: true }] });
+
+        const excelCols = [
+            { header: "Sr. No.", key: "sr", width: 8 },
+            { header: "Emp Code", key: "code", width: 12 },
+            { header: "Name of employee", key: "name", width: 32 },
+            { header: "Last Increment", key: "lastIncrement", width: 16 },
+            { header: "Designation / Nature of Work done", key: "designation", width: 28 },
+            ...months.map(m => ({ header: m.label, key: m.label, width: 14 })),
+            { header: "Total", key: "total", width: 16 }
+        ];
+
+        worksheet.columns = excelCols;
+
+        const headerRow1 = worksheet.getRow(1);
+        headerRow1.height = 30;
+        headerRow1.eachCell((cell) => {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            cell.border = {
+                top: { style: 'medium', color: { argb: 'FF0F172A' } },
+                bottom: { style: 'thin', color: { argb: 'FF334155' } },
+                left: { style: 'thin', color: { argb: 'FF334155' } },
+                right: { style: 'thin', color: { argb: 'FF334155' } }
+            };
+        });
+
+        let monthTotals = new Array(months.length).fill(0);
+        let grandTotal = 0;
+
+        employees.forEach((emp, index) => {
+            let rowObj = {
+                sr: index + 1,
+                code: emp.code,
+                name: emp.name,
+                lastIncrement: emp.lastIncrement || "",
+                designation: emp.designation || ""
+            };
+
+            let rowSum = 0;
+            months.forEach((m, mIdx) => {
+                const recKey = `${m.year}-${m.monthNum}-${emp.id}`;
+                const rec = monthlyPayrollRecords[recKey] || null;
+                const res = calculateEmpPayroll(emp, 31, (rec ? rec.paidDays : 31), rec);
+
+                let val = 0;
+                if (currentSalarySubTab === 'basic_da') val = res.baseBasic;
+                else if (currentSalarySubTab === 'hra') val = res.earnedHra;
+                else if (currentSalarySubTab === 'spl_allow') val = res.baseSpl;
+                else if (currentSalarySubTab === 'city_allow') val = res.baseCity;
+                else if (currentSalarySubTab === 'deduct_short') val = res.deductShortTime;
+                else if (currentSalarySubTab === 'ot_arrear') val = res.overtimeArrear;
+                else if (currentSalarySubTab === 'penalty') val = res.penaltyLate;
+                else if (currentSalarySubTab === 'advance') val = res.advance;
+                else if (currentSalarySubTab === 'pf') val = res.pf;
+                else if (currentSalarySubTab === 'esi') val = res.esic;
+                else if (currentSalarySubTab === 'epf') val = res.epf || res.pf;
+
+                rowObj[m.label] = val;
+                rowSum += val;
+                monthTotals[mIdx] += val;
+            });
+
+            rowObj.total = rowSum;
+            grandTotal += rowSum;
+
+            const addedRow = worksheet.addRow(rowObj);
+            addedRow.height = 22;
+
+            addedRow.eachCell((cell, colNumber) => {
+                cell.font = { name: 'Segoe UI', size: 9.5, color: { argb: 'FF1E293B' } };
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+                };
+
+                if (colNumber === 1 || colNumber === 2 || colNumber === 4) {
+                    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                } else if (colNumber > 5) {
+                    cell.alignment = { vertical: 'middle', horizontal: 'right' };
+                    cell.numFmt = '#,##0';
+                } else {
+                    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+                }
+            });
+        });
+
+        let footerRowObj = { sr: "", code: "", name: "TOTAL", lastIncrement: "", designation: "" };
+        months.forEach((m, mIdx) => { footerRowObj[m.label] = monthTotals[mIdx]; });
+        footerRowObj.total = grandTotal;
+
+        const totalRow = worksheet.addRow(footerRowObj);
+        totalRow.height = 25;
+        totalRow.eachCell((cell, colNumber) => {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+            cell.border = {
+                top: { style: 'medium', color: { argb: 'FF94A3B8' } },
+                bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+                left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+                right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+            };
+            if (colNumber > 5) cell.numFmt = '#,##0';
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${meta.title.replace(/[\/\?%*:|"<>]/g, '_')}_Matrix.xlsx`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+
+        showToast(`Excel downloaded: ${meta.title}`);
+    } catch (err) {
+        console.error("Matrix Export Error:", err);
+        showToast("Error exporting matrix to Excel!", "error");
+    }
+}
+
+// -------------------------------------------------------------
+// NEW TAB: DETAIL OF DEDUCTION FROM SALARY (PRANAV CREATION MASTER)
+// -------------------------------------------------------------
+function renderSalarySheetCalc() {
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+    const query = (document.getElementById('calc-sheet-search')?.value || '').toLowerCase();
+
+    const titleEl = document.getElementById('calc-sheet-title');
+    const badgeEl = document.getElementById('calc-sheet-badge');
+    if (titleEl) titleEl.innerText = `DETAIL OF DEDUCTION FROM SALARY - ${period.monthName.toUpperCase()} ${period.year}`;
+    if (badgeEl) badgeEl.innerText = `${workingDays} Days (${period.monthName} ${period.year})`;
+
+    const tbody = document.getElementById('salary-sheet-calc-tbody');
+    const tfoot = document.getElementById('salary-sheet-calc-tfoot');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const bioRecs = biometricRecords[`${period.year}-${period.monthNum}`] || [];
+    const bioMap = {};
+    bioRecs.forEach(r => { bioMap[r.code] = r; });
+
+    let totals = {
+        daysInMonth: 0, leavesTaken: 0, attendance: 0,
+        amount: 0, shortDeduction: 0, overtimeAmount: 0
+    };
+    let count = 0;
+
+    employees.forEach((emp, index) => {
+        if (query && !emp.name.toLowerCase().includes(query) && !emp.code.toLowerCase().includes(query)) return;
+
+        count++;
+        const payrollSalary = getSalaryMasterValues(emp);
+        const codeStr = String(emp.code).trim();
+        const bRec = bioMap[codeStr] || null;
+
+        const leaves = bRec ? bRec.absentDays : 0;
+        const att = Math.max(0, workingDays - leaves);
+        const totalHrs = workingDays * 9;
+        
+        let workingHrsStr = "-";
+        let shortTimeStr = "-";
+        let overtimeStr = "-";
+        let amount = 0;
+        let shortDeduct = 0;
+        let overtimePay = 0;
+
+        const isMgr = isManagerEmployee(emp);
+        if (isMgr) {
+            workingHrsStr = `${totalHrs}:00`;
+            shortTimeStr = "00:00";
+            overtimeStr = "00:00";
+            amount = 0;
+            shortDeduct = 0;
+            overtimePay = 0;
+        } else if (bRec) {
+            workingHrsStr = bRec.hoursWorked || "00:00";
+            // parse hours to minutes
+            let parts = (bRec.hoursWorked || "0:0").split(':').map(Number);
+            let wMin = (parts[0] || 0) * 60 + (parts[1] || 0);
+            let totMin = totalHrs * 60;
+            let diffMin = wMin - totMin;
+
+            if (diffMin < 0) {
+                let absMin = Math.abs(diffMin);
+                let h = Math.floor(absMin / 60);
+                let m = absMin % 60;
+                shortTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            } else if (diffMin > 0) {
+                let h = Math.floor(diffMin / 60);
+                let m = diffMin % 60;
+                overtimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            }
+
+            let ratePerHour = payrollSalary.basicRate > 0 ? (payrollSalary.basicRate / workingDays / 9) : 0;
+            amount = Math.round(diffMin / 60 * ratePerHour);
+            shortDeduct = amount < 0 ? amount : 0;
+            overtimePay = amount > 0 ? amount * 2 : 0;
+        }
+
+        totals.daysInMonth += workingDays;
+        totals.leavesTaken += leaves;
+        totals.attendance += att;
+        totals.amount += amount;
+        totals.shortDeduction += shortDeduct;
+        totals.overtimeAmount += overtimePay;
+
+        const isRateMissing = !payrollSalary.basicRate || payrollSalary.basicRate <= 0;
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 border-b text-[11px] leading-tight";
+        tr.innerHTML = `
+            <td class="p-2 text-center font-bold text-slate-800 sticky left-0 bg-white z-10 border-r">${emp.code}</td>
+            <td class="p-2 text-center font-bold text-indigo-700 sticky left-12 bg-white z-10 border-r">${emp.payrollCode || '-'}</td>
+            <td class="p-2 font-bold text-slate-900 sticky left-28 bg-white z-10 border-r">${emp.name}</td>
+            <td class="p-2 text-slate-600 border-r">${emp.designation || '-'}</td>
+            <td class="p-2 text-center border-r font-medium">${workingDays}</td>
+            <td class="p-2 text-center border-r font-bold ${leaves > 0 ? 'text-rose-600' : 'text-slate-400'}">${leaves}</td>
+            <td class="p-2 text-center border-r font-bold text-emerald-700">${att}</td>
+            <td class="p-2 text-center border-r font-mono text-slate-600">${totalHrs}:00</td>
+            <td class="p-2 text-center border-r font-mono font-bold text-slate-800">${workingHrsStr}</td>
+            <td class="p-2 text-center border-r font-mono font-bold text-rose-600">${shortTimeStr}</td>
+            <td class="p-2 text-center border-r font-mono font-bold text-teal-600">${overtimeStr}</td>
+            <td class="p-2 text-right border-r font-bold ${amount < 0 ? 'text-rose-600' : (amount > 0 ? 'text-teal-700' : 'text-slate-600')}">₹${amount.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r font-bold text-rose-600 bg-rose-50/50">₹${shortDeduct.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r font-bold text-teal-700 bg-teal-50/50">₹${overtimePay.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-center font-semibold text-[10px]">
+                ${isRateMissing ? '<span class="text-rose-600 font-bold">Rate Missing in Master</span>' : (bRec ? '<span class="text-emerald-700">OK</span>' : '<span class="text-amber-600">No Bio Log</span>')}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    if (tfoot) {
+        tfoot.innerHTML = `
+            <tr class="bg-slate-200 border-t-2 border-slate-400 font-extrabold text-slate-900 text-[11px]">
+                <td colspan="4" class="p-2.5 text-left uppercase tracking-wider sticky left-0 bg-slate-200 z-10 border-r">
+                    TOTAL DEDUCTION (${count} Staff):
+                </td>
+                <td class="p-2 text-center border-r font-bold">${totals.daysInMonth}</td>
+                <td class="p-2 text-center border-r font-bold text-rose-700">${totals.leavesTaken}</td>
+                <td class="p-2 text-center border-r font-bold text-emerald-800">${totals.attendance}</td>
+                <td colspan="4" class="p-2 text-center border-r">-</td>
+                <td class="p-2 text-right border-r font-black text-slate-900">₹${totals.amount.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-black text-rose-800 bg-rose-200">₹${totals.shortDeduction.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-black text-teal-900 bg-teal-200">₹${totals.overtimeAmount.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-center"></td>
+            </tr>
+        `;
+    }
+}
+
+// 1-Click Master Styled Export: Downloads exact Excel file with MAIN SHEET and Employee Tabs
+function exportPranavMasterSalarySheet() {
+    const period = getSelectedPeriod();
+    showToast(`Generating Master Salary Sheet with Employee tabs for ${period.monthName} ${period.year}...`);
+    window.location.href = `/api/export_pranav_salary_sheet?month=${period.monthNum}&year=${period.year}`;
+}
+
+// -------------------------------------------------------------
+// FINAL SALARY SHEET (Statutory Register)
+// -------------------------------------------------------------
+function renderSalarySheet() {
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+    const query = (document.getElementById('sheet-search')?.value || '').toLowerCase();
+
+    const titleEl = document.getElementById('sheet-title-text');
+    if (titleEl) titleEl.innerText = `FINAL SALARY SHEET FOR ${period.monthName.toUpperCase()} ${period.year}`;
+
+    const badgeEl = document.getElementById('sheet-period-badge');
+    if (badgeEl) badgeEl.innerText = `${workingDays} Days (${period.monthName} ${period.year})`;
+
+    const tbody = document.getElementById('salary-sheet-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    let totals = {
+        baseBasic: 0, baseHra: 0, baseSpl: 0, baseCity: 0, baseTotal: 0,
+        earnedBasic: 0, earnedHra: 0, earnedSpl: 0, earnedCity: 0, earnedTotal: 0,
+        shortTime: 0, overtime: 0, penalty: 0, totalPayable: 0,
+        advance: 0, pf: 0, esi: 0, netPaid: 0
+    };
+    let count = 0;
+
+    // RULE: Only permanent payroll employees (having payrollCode) appear in Final Salary Sheet
+    const payrollEmployees = employees.filter(emp => {
+        const pCode = String(emp.payrollCode || '').trim();
+        return pCode !== '' && pCode !== '-' && pCode.toUpperCase() !== 'NONE';
+    });
+
+    payrollEmployees.forEach((emp, index) => {
+        const isMgr = isManagerEmployee(emp);
+        if (query && !emp.name.toLowerCase().includes(query) && !emp.code.toLowerCase().includes(query)) return;
+
+        count++;
+        const recKey = `${period.year}-${period.monthNum}-${emp.id}`;
+        const rec = monthlyPayrollRecords[recKey] || null;
+        const actualPaidDays = isMgr ? workingDays : (rec ? rec.paidDays : workingDays);
+        const res = calculateEmpPayroll(emp, workingDays, actualPaidDays, isMgr ? { ...rec, deductShortTime: 0, penaltyLate: 0 } : rec);
+
+        totals.baseBasic += res.baseBasic;
+        totals.baseHra += res.baseHra;
+        totals.baseSpl += res.baseSpl;
+        totals.baseCity += res.baseCity;
+        totals.baseTotal += res.baseTotalGross;
+
+        totals.earnedBasic += res.earnedBasic;
+        totals.earnedHra += res.earnedHra;
+        totals.earnedSpl += res.earnedSpl;
+        totals.earnedCity += res.earnedCity;
+        totals.earnedTotal += res.earnedTotal;
+
+        totals.shortTime += res.deductShortTime;
+        totals.overtime += res.overtimeArrear;
+        totals.penalty += res.penaltyLate;
+        totals.totalPayable += res.totalPayable;
+
+        totals.advance += res.advance;
+        totals.pf += res.pf;
+        totals.esi += res.esic;
+        totals.netPaid += res.netSalary;
+
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 border-b text-[11px] leading-tight";
+        tr.innerHTML = `
+            <td class="p-2 text-center font-medium sticky left-0 bg-white z-10 border-r">${index + 1}</td>
+            <td class="p-2 text-center font-bold text-indigo-700 sticky left-12 bg-white z-10 border-r">${emp.payrollCode || emp.code}</td>
+            <td class="p-2 font-bold text-slate-900 sticky left-32 bg-white z-10 border-r">${emp.name}</td>
+            <td class="p-2 text-center font-mono text-slate-600 border-r">${emp.esicIpNumber || '-'}</td>
+            <td class="p-2 text-center font-mono text-slate-600 border-r">${emp.uan || '-'}</td>
+
+            <td class="p-2 text-right border-r font-medium">₹${res.baseBasic.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-600">₹${res.baseHra.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-600">₹${res.baseSpl.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-600">₹${res.baseCity.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r font-bold text-slate-800 bg-slate-50">₹${res.baseTotalGross.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-center border-r">
+                <input type="number" value="${rec ? rec.paidDays : workingDays}" min="0" max="${workingDays}" onchange="updateEmpAttendance('${emp.id}', this.value)" class="w-12 p-1 text-center border rounded font-bold text-slate-800 no-print">
+                <span class="print-only">${rec ? rec.paidDays : workingDays}</span>
+            </td>
+
+            <td class="p-2 text-right border-r font-bold text-slate-800">₹${res.earnedBasic.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-700">₹${res.earnedHra.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-700">₹${res.earnedSpl.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-slate-700">₹${res.earnedCity.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r font-extrabold text-emerald-800 bg-emerald-50">₹${res.earnedTotal.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-right border-r text-rose-600">₹${res.deductShortTime.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-teal-700 font-semibold">₹${res.overtimeArrear.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-rose-600">₹${res.penaltyLate.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-right border-r font-extrabold text-teal-900 bg-teal-50">₹${res.totalPayable.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-right border-r">
+                <input type="number" value="${res.advance}" min="0" onchange="updateEmpAdvance('${emp.id}', this.value)" class="w-16 p-1 text-right border rounded font-medium text-rose-600 no-print">
+                <span class="print-only">₹${res.advance}</span>
+            </td>
+            <td class="p-2 text-right border-r text-rose-700 font-medium">₹${res.pf.toLocaleString('en-IN')}</td>
+            <td class="p-2 text-right border-r text-rose-700 font-medium">₹${res.esic.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-right border-r font-black text-brand-800 bg-sky-50 text-xs">₹${res.netSalary.toLocaleString('en-IN')}</td>
+
+            <td class="p-2 text-center border-r text-slate-300 font-mono italic text-[10px]">
+                <span class="print-only">_________________</span>
+                <span class="no-print text-slate-400">Sign / Thumb</span>
+            </td>
+
+            <td class="p-2 text-center no-print">
+                <div class="flex items-center justify-center gap-1.5">
+                    <button onclick="openPayslipModal('${emp.id}')" class="w-7 h-7 rounded bg-brand-50 text-brand-600 hover:bg-brand-600 hover:text-white transition flex items-center justify-center" title="Print Payslip">
+                        <i class="fa-solid fa-receipt"></i>
+                    </button>
+                    <button onclick="deleteEmployee('${emp.id}')" class="w-7 h-7 rounded bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white transition flex items-center justify-center" title="Remove">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </td>`;
+        tbody.appendChild(tr);
+    });
+
+    const tfoot = document.getElementById('salary-sheet-tfoot');
+    if (tfoot) {
+        tfoot.innerHTML = `
+            <tr class="bg-slate-200 border-t-2 border-slate-400 font-extrabold text-slate-900 text-[11px]">
+                <td colspan="5" class="p-2.5 text-right uppercase tracking-wider sticky left-0 bg-slate-200 z-10 border-r">
+                    TOTAL (${count} Staff):
+                </td>
+                
+                <td class="p-2 text-right border-r font-bold">₹${totals.baseBasic.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold">₹${totals.baseHra.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold">₹${totals.baseSpl.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold">₹${totals.baseCity.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-black bg-slate-300">₹${totals.baseTotal.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 text-center border-r">-</td>
+
+                <td class="p-2 text-right border-r font-bold text-slate-900">₹${totals.earnedBasic.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold text-slate-900">₹${totals.earnedHra.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold text-slate-900">₹${totals.earnedSpl.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-bold text-slate-900">₹${totals.earnedCity.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r font-black text-emerald-900 bg-emerald-100">₹${totals.earnedTotal.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 text-right border-r text-rose-700 font-bold">₹${totals.shortTime.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r text-teal-800 font-bold">₹${totals.overtime.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r text-rose-700 font-bold">₹${totals.penalty.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 text-right border-r font-black text-teal-900 bg-teal-200">₹${totals.totalPayable.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 text-right border-r text-rose-800 font-bold">₹${totals.advance.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r text-rose-800 font-bold">₹${totals.pf.toLocaleString('en-IN')}</td>
+                <td class="p-2 text-right border-r text-rose-800 font-bold">₹${totals.esi.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 text-right border-r font-black text-brand-900 bg-sky-200 text-xs">₹${totals.netPaid.toLocaleString('en-IN')}</td>
+
+                <td class="p-2 border-r text-center"></td>
+                <td class="no-print"></td>
+            </tr>`;
+    }
+}
+
+async function updateEmpAttendance(empId, val) {
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+    const recKey = `${period.year}-${period.monthNum}-${empId}`;
+    if (!monthlyPayrollRecords[recKey]) monthlyPayrollRecords[recKey] = { paidDays: workingDays, advance: 0 };
+    monthlyPayrollRecords[recKey].paidDays = parseFloat(val) || 0;
+
+    await fetch('/api/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: recKey, paidDays: monthlyPayrollRecords[recKey].paidDays, advance: monthlyPayrollRecords[recKey].advance })
+    });
+
+    renderSalarySheet();
+    renderSalarySheetCalc();
+    if (currentMasterSubTab === 'attendance' || currentMasterSubTab === 'emp' || currentMasterSubTab === 'salary') renderMasterTable();
+    if (currentTab === 'salary-data') renderSalaryDataTable();
+}
+
+async function updateEmpAdvance(empId, val) {
+    const period = getSelectedPeriod();
+    const recKey = `${period.year}-${period.monthNum}-${empId}`;
+    const numVal = parseFloat(val) || 0;
+    
+    if (!monthlyPayrollRecords[recKey]) monthlyPayrollRecords[recKey] = { paidDays: period.daysInMonth, advance: 0 };
+    monthlyPayrollRecords[recKey].advance = numVal;
+
+    await fetch('/api/monthly_record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: recKey, field: 'advance', value: numVal })
+    });
+
+    renderSalarySheet();
+    renderSalarySheetCalc();
+    if (currentTab === 'salary-data') renderSalaryDataTable();
+    showToast(`Advance updated for ${period.monthName} ${period.year}!`);
+}
+
+// -------------------------------------------------------------
+// BIOMETRIC ATTENDANCE ENGINE & UI HANDLERS
+// -------------------------------------------------------------
+function triggerBiometricUpload() {
+    const input = document.getElementById('bio-file-input');
+    if (input) {
+        input.value = '';
+        input.click();
+    }
+}
+
+function handleBiometricFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        try {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            
+            let targetSheet = null;
+            let maxRows = 0;
+            
+            for (const sName of workbook.SheetNames) {
+                const ws = workbook.Sheets[sName];
+                if (ws && ws['!ref']) {
+                    const testAoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+                    if (testAoa && testAoa.length > maxRows) {
+                        // Check if it contains Present or Code & Name
+                        const hasData = testAoa.some(row => row.some(cell => String(cell || '').trim().toLowerCase().includes('present') || String(cell || '').trim().toLowerCase().includes('code & name')));
+                        if (hasData) {
+                            maxRows = testAoa.length;
+                            targetSheet = ws;
+                        }
+                    }
+                }
+            }
+
+            if (!targetSheet) {
+                for (const sName of workbook.SheetNames) {
+                    const ws = workbook.Sheets[sName];
+                    if (ws && ws['!ref']) {
+                        const testAoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+                        if (testAoa && testAoa.length > maxRows) {
+                            maxRows = testAoa.length;
+                            targetSheet = ws;
+                        }
+                    }
+                }
+            }
+
+            if (!targetSheet) targetSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rawAoa = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: "" });
+
+            if (!rawAoa || rawAoa.length < 5) {
+                showToast("Invalid Biometric Excel format: File is too short!", "error");
+                return;
+            }
+
+            let detectedMonth = 8;
+            let detectedYear = 2026;
+            for (let r = 0; r < rawAoa.length; r++) {
+                const rowStr = rawAoa[r].join(' ');
+                const m = rowStr.match(/(\d{2})[\/](\d{2})[\/](\d{4})/);
+                if (m) {
+                    detectedMonth = parseInt(m[2]);
+                    detectedYear = parseInt(m[3]);
+                    break;
+                }
+            }
+
+            const parsedEmployees = [];
+            let currentDailyLogs = [];
+            let currentCode = "";
+            let currentName = "";
+
+            for (let r = 0; r < rawAoa.length; r++) {
+                const row = rawAoa[r];
+                const rowFlatStr = row.join(' ').toLowerCase();
+                const col0 = String(row[0] || '').trim();
+
+                if (rowFlatStr.includes('code & name') || col0.includes('** Code & Name') || col0.includes('Code & Name')) {
+                    currentCode = String(row[1] || row[12] || row[11] || '').trim();
+                    currentName = String(row[2] || row[13] || row[12] || '').trim();
+                    currentDailyLogs = [];
+                    continue;
+                }
+
+                if (/^\d{2}[\/]\d{2}[\/]\d{4}$/.test(col0)) {
+                    currentDailyLogs.push({
+                        date: col0,
+                        day: String(row[1] || ''),
+                        shift: String(row[2] || ''),
+                        inTime: String(row[3] || '-'),
+                        outTime: String(row[4] || '-'),
+                        shiftLate: String(row[5] || '-'),
+                        shiftEarly: String(row[6] || '-'),
+                        hoursWorked: String(row[7] || '-'),
+                        status: String(row[9] || row[8] || '-')
+                    });
+                    continue;
+                }
+
+                if (col0.toLowerCase() === 'present' || rowFlatStr.includes('present') && (rowFlatStr.includes('absent') || rowFlatStr.includes('hours worked'))) {
+                    // Find indices dynamically
+                    let pIdx = row.findIndex(c => String(c).trim().toLowerCase() === 'present');
+                    let aIdx = row.findIndex(c => String(c).trim().toLowerCase() === 'absent');
+                    let hIdx = row.findIndex(c => String(c).trim().toLowerCase() === 'holiday');
+                    let wIdx = row.findIndex(c => String(c).trim().toLowerCase().includes('weekly off') || String(c).trim().toLowerCase() === 'wo');
+                    let hwIdx = row.findIndex(c => String(c).trim().toLowerCase().includes('hours worked'));
+                    let otIdx = row.findIndex(c => String(c).trim().toLowerCase().includes('over time') || String(c).trim().toLowerCase().includes('overtime'));
+
+                    const present = parseFloat(row[pIdx >= 0 ? pIdx + 1 : 1] || 0) || 0;
+                    const absent = parseFloat(row[aIdx >= 0 ? aIdx + 1 : 3] || 0) || 0;
+                    const holiday = parseFloat(row[hIdx >= 0 ? hIdx + 1 : 5] || 0) || 0;
+                    const weeklyOff = parseFloat(row[wIdx >= 0 ? wIdx + 1 : 7] || 0) || 0;
+                    const hoursWorked = String(row[hwIdx >= 0 ? hwIdx + 1 : 9] || '00:00').trim();
+                    const overtimeHours = String(row[otIdx >= 0 ? otIdx + 1 : 11] || '00:00').trim();
+                    
+                    let code = "";
+                    let name = "";
+                    for (let c = row.length - 1; c >= 0; c--) {
+                        const val = String(row[c] || '').trim();
+                        if (val && !isFinite(val) && val !== 'Present' && val !== 'Absent' && !val.includes(':')) {
+                            if (!name) name = val;
+                            else if (!code && isFinite(row[c-1])) { code = String(row[c-1]).trim(); break; }
+                        }
+                    }
+                    if (!code) code = String(row[12] || row[11] || currentCode || '').trim();
+                    if (!name) name = String(row[13] || row[12] || currentName || '').trim();
+
+                    const paidDays = present + weeklyOff + holiday;
+
+                    if (code) {
+                        parsedEmployees.push({
+                            code: code,
+                            payrollCode: "",
+                            name: name || code,
+                            presentDays: present,
+                            absentDays: absent,
+                            weeklyOff: weeklyOff,
+                            holiday: holiday,
+                            paidDays: paidDays,
+                            hoursWorked: hoursWorked,
+                            overtimeHours: overtimeHours,
+                            dailyLogs: [...currentDailyLogs]
+                        });
+                    }
+                    currentDailyLogs = [];
+                }
+            }
+
+            if (parsedEmployees.length === 0) {
+                showToast("No employee biometric summaries found in file!", "error");
+                return;
+            }
+
+            pendingBiometricImportData = {
+                month: detectedMonth,
+                year: detectedYear,
+                fileName: file.name,
+                employees: parsedEmployees
+            };
+
+            openBiometricConfirmModal(pendingBiometricImportData);
+
+        } catch (err) {
+            console.error("Biometric Parse Error:", err);
+            showToast("Failed to parse Biometric Excel file!", "error");
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+
+function openBiometricConfirmModal(data) {
+    const monthSelect = document.getElementById('bio-modal-month-select');
+    const yearSelect = document.getElementById('bio-modal-year-select');
+    const countEl = document.getElementById('bio-modal-staff-count');
+    const tbody = document.getElementById('bio-preview-tbody');
+
+    if (monthSelect) monthSelect.value = data.month;
+    if (yearSelect) yearSelect.value = data.year;
+    if (countEl) countEl.innerText = `${data.employees.length} Employees Detected`;
+
+    if (tbody) {
+        tbody.innerHTML = '';
+        data.employees.slice(0, 15).forEach(e => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="p-2 text-center font-bold text-slate-800">${e.code}</td>
+                <td class="p-2 font-medium text-slate-900">${e.name}</td>
+                <td class="p-2 text-right font-bold text-emerald-700">${e.presentDays}</td>
+                <td class="p-2 text-right font-bold text-rose-600">${e.absentDays}</td>
+                <td class="p-2 text-right text-slate-600">${e.weeklyOff}</td>
+                <td class="p-2 text-right text-slate-600">${e.holiday}</td>
+                <td class="p-2 text-right font-black text-emerald-800 bg-emerald-50">${e.paidDays}</td>
+                <td class="p-2 text-center font-mono text-slate-700">${e.hoursWorked}</td>
+                <td class="p-2 text-center font-mono text-teal-700">${e.overtimeHours}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    document.getElementById('biometric-confirm-modal')?.classList.remove('hidden');
+}
+
+function closeBiometricConfirmModal() {
+    document.getElementById('biometric-confirm-modal')?.classList.add('hidden');
+    pendingBiometricImportData = null;
+}
+
+async function confirmBiometricInsertion() {
+    if (!pendingBiometricImportData) return;
+
+    const monthNum = parseInt(document.getElementById('bio-modal-month-select')?.value) || pendingBiometricImportData.month;
+    const year = parseInt(document.getElementById('bio-modal-year-select')?.value) || pendingBiometricImportData.year;
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const monthName = monthNames[monthNum - 1];
+    const monthKey = `${year}-${monthNum}`;
+
+    showToast(`Inserting ${pendingBiometricImportData.employees.length} Biometric records...`);
+
+    const payload = {
+        monthKey: monthKey,
+        year: year,
+        month: monthNum,
+        monthName: monthName,
+        fileName: pendingBiometricImportData.fileName,
+        employees: pendingBiometricImportData.employees
+    };
+
+    try {
+        const response = await fetch('/api/biometric/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const res = await response.json();
+        if (response.ok && res.status === 'success') {
+            currentBiometricMonthKey = monthKey;
+            closeBiometricConfirmModal();
+            showToast(`${monthName} ${year} Biometric Attendance successfully saved & synced!`);
+            
+            await fetchServerData();
+            
+            const monthSelect = document.getElementById('global-month-select');
+            const yearSelect = document.getElementById('global-year-select');
+            if (monthSelect) monthSelect.value = monthNum;
+            if (yearSelect) yearSelect.value = year;
+
+            onPeriodChange();
+            switchTab('salary-sheet-calc');
+        } else {
+            showToast(res.message || "Failed to insert biometric records", "error");
+        }
+    } catch (err) {
+        console.error("Save Biometric Error:", err);
+        showToast("Server connection error during biometric save!", "error");
+    }
+}
+
+async function deleteActiveBiometricMonth() {
+    if (!currentBiometricMonthKey) return;
+    const currentMonthObj = biometricMonths.find(m => m.monthKey === currentBiometricMonthKey);
+    const label = currentMonthObj ? `${currentMonthObj.monthName} ${currentMonthObj.year}` : currentBiometricMonthKey;
+
+    if (!confirm(`Are you sure you want to remove biometric records for ${label}?`)) return;
+
+    try {
+        const res = await fetch(`/api/biometric/${currentBiometricMonthKey}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast(`Biometric records for ${label} deleted.`);
+            currentBiometricMonthKey = "";
+            await fetchServerData();
+        }
+    } catch (err) {
+        showToast("Error deleting biometric month", "error");
+    }
+}
+
+function renderBiometricModule() {
+    const filterSelect = document.getElementById('bio-month-filter');
+    if (filterSelect) {
+        filterSelect.innerHTML = '';
+        if (biometricMonths.length === 0) {
+            filterSelect.innerHTML = '<option value="">No Uploaded Month</option>';
+        } else {
+            biometricMonths.forEach(bm => {
+                const opt = document.createElement('option');
+                opt.value = bm.monthKey;
+                opt.innerText = `${bm.monthName} ${bm.year}`;
+                if (bm.monthKey === currentBiometricMonthKey) opt.selected = true;
+                filterSelect.appendChild(opt);
+            });
+        }
+    }
+
+    const currentMonthObj = biometricMonths.find(m => m.monthKey === currentBiometricMonthKey) || (biometricMonths[0] || null);
+    const badgeEl = document.getElementById('bio-active-month-badge');
+    if (badgeEl) {
+        badgeEl.innerText = currentMonthObj ? `${currentMonthObj.monthName} ${currentMonthObj.year}` : "No Month Active";
+    }
+
+    renderBiometricTable();
+}
+
+function onBiometricMonthChange(val) {
+    currentBiometricMonthKey = val;
+    renderBiometricModule();
+}
+
+function renderBiometricTable() {
+    const records = biometricRecords[currentBiometricMonthKey] || [];
+    const query = (document.getElementById('bio-search')?.value || '').toLowerCase();
+    const tbody = document.getElementById('biometric-tbody');
+    const tfoot = document.getElementById('biometric-tfoot');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    let totalStaff = 0, sumPresent = 0, sumAbsent = 0, sumPaid = 0;
+
+    records.forEach((r, idx) => {
+        if (query && !r.name.toLowerCase().includes(query) && !r.code.toLowerCase().includes(query)) return;
+
+        totalStaff++;
+        sumPresent += r.presentDays;
+        sumAbsent += r.absentDays;
+        sumPaid += r.paidDays;
+
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-50 border-b text-[12px]";
+        tr.innerHTML = `
+            <td class="p-2.5 text-center font-medium sticky left-0 bg-white z-10 border-r">${idx + 1}</td>
+            <td class="p-2.5 text-center font-bold text-slate-800 sticky left-12 bg-white z-10 border-r">${r.code}</td>
+            <td class="p-2.5 font-bold text-slate-900 sticky left-32 bg-white z-10 border-r">${r.name}</td>
+            <td class="p-2.5 text-right font-bold text-emerald-700 border-r">${r.presentDays}</td>
+            <td class="p-2.5 text-right font-bold text-rose-600 border-r">${r.absentDays}</td>
+            <td class="p-2.5 text-right text-slate-600 border-r">${r.weeklyOff}</td>
+            <td class="p-2.5 text-right text-slate-600 border-r">${r.holiday}</td>
+            <td class="p-2.5 text-right font-black text-emerald-800 bg-emerald-50 border-r text-sm">${r.paidDays}</td>
+            <td class="p-2.5 text-center font-mono text-slate-700 border-r">${r.hoursWorked}</td>
+            <td class="p-2.5 text-center font-mono text-teal-700 font-bold border-r">${r.overtimeHours}</td>
+            <td class="p-2.5 text-center border-r">
+                <span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                    <i class="fa-solid fa-circle-check text-emerald-600"></i> Synced
+                </span>
+            </td>
+            <td class="p-2.5 text-center sticky right-0 bg-white z-10 shadow-md">
+                <button onclick="openBiometricDailyModal('${r.code}')" class="px-2.5 py-1 bg-cyan-50 hover:bg-cyan-600 text-cyan-700 hover:text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 mx-auto">
+                    <i class="fa-regular fa-clock"></i> Logs
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    const kpiCount = document.getElementById('bio-kpi-count');
+    const kpiPresent = document.getElementById('bio-kpi-present');
+    const kpiAbsent = document.getElementById('bio-kpi-absent');
+    const kpiAvgPaid = document.getElementById('bio-kpi-avg-paid');
+
+    if (kpiCount) kpiCount.innerText = totalStaff;
+    if (kpiPresent) kpiPresent.innerText = sumPresent;
+    if (kpiAbsent) kpiAbsent.innerText = sumAbsent;
+    if (kpiAvgPaid) kpiAvgPaid.innerText = totalStaff > 0 ? (sumPaid / totalStaff).toFixed(1) : "0";
+
+    if (tfoot) {
+        tfoot.innerHTML = `
+            <tr class="bg-slate-200 border-t-2 border-slate-400 font-extrabold text-slate-900 text-[11px]">
+                <td colspan="3" class="p-2.5 text-right uppercase tracking-wider sticky left-0 bg-slate-200 z-10 border-r">
+                    TOTAL (${totalStaff} Staff):
+                </td>
+                <td class="p-2.5 text-right font-black text-emerald-800 border-r">${sumPresent}</td>
+                <td class="p-2.5 text-right font-black text-rose-700 border-r">${sumAbsent}</td>
+                <td colspan="2" class="p-2.5 text-center border-r">-</td>
+                <td class="p-2.5 text-right font-black text-emerald-900 bg-emerald-200 border-r text-sm">${sumPaid}</td>
+                <td colspan="4" class="p-2.5 text-center sticky right-0 bg-slate-200"></td>
+            </tr>
+        `;
+    }
+}
+
+function openBiometricDailyModal(empCode) {
+    const records = biometricRecords[currentBiometricMonthKey] || [];
+    const emp = records.find(r => r.code === empCode);
+    if (!emp) return;
+
+    const titleEl = document.getElementById('bio-daily-modal-title');
+    const subEl = document.getElementById('bio-daily-modal-sub');
+    if (titleEl) titleEl.innerText = `${emp.name} (Emp Code: ${emp.code})`;
+    if (subEl) subEl.innerText = `Daily Punch Log Card - Total Paid Days: ${emp.paidDays} (Present: ${emp.presentDays}, Absent: ${emp.absentDays}, WO: ${emp.weeklyOff})`;
+
+    const tbody = document.getElementById('bio-daily-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    (emp.dailyLogs || []).forEach(log => {
+        const tr = document.createElement('tr');
+        const isAbsent = log.status === 'A';
+        const isWO = log.status === 'WO';
+        const badgeClass = isAbsent ? 'bg-rose-100 text-rose-800' : (isWO ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800');
+
+        tr.innerHTML = `
+            <td class="p-2 text-center font-mono font-medium">${log.date}</td>
+            <td class="p-2 text-center font-bold text-slate-600">${log.day}</td>
+            <td class="p-2 text-center text-slate-500">${log.shift}</td>
+            <td class="p-2 text-center font-mono ${log.inTime !== '-' ? 'font-bold text-slate-800' : 'text-slate-400'}">${log.inTime}</td>
+            <td class="p-2 text-center font-mono ${log.outTime !== '-' ? 'font-bold text-slate-800' : 'text-slate-400'}">${log.outTime}</td>
+            <td class="p-2 text-center font-mono text-rose-600">${log.shiftLate}</td>
+            <td class="p-2 text-center font-mono text-slate-500">${log.shiftEarly}</td>
+            <td class="p-2 text-center font-mono font-bold text-slate-800">${log.hoursWorked}</td>
+            <td class="p-2 text-center"><span class="${badgeClass} px-2 py-0.5 rounded text-[10px] font-bold">${log.status}</span></td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    document.getElementById('biometric-daily-modal')?.classList.remove('hidden');
+}
+
+function closeBiometricDailyModal() {
+    document.getElementById('biometric-daily-modal')?.classList.add('hidden');
+}
+
+async function exportBiometricSummaryExcel() {
+    const currentMonthObj = biometricMonths.find(m => m.monthKey === currentBiometricMonthKey);
+    const records = biometricRecords[currentBiometricMonthKey] || [];
+    if (!records || records.length === 0) {
+        showToast("No biometric records to export!", "error");
+        return;
+    }
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        const sheetTitle = currentMonthObj ? `Biometric_${currentMonthObj.monthName}_${currentMonthObj.year}` : "Biometric_Summary";
+        const worksheet = workbook.addWorksheet(sheetTitle.slice(0, 30), { views: [{ showGridLines: true }] });
+
+        worksheet.columns = [
+            { header: "Sr. No.", key: "sr", width: 8 },
+            { header: "Emp Code", key: "code", width: 12 },
+            { header: "Name of Employee", key: "name", width: 30 },
+            { header: "Present Days", key: "present", width: 14 },
+            { header: "Absent Days", key: "absent", width: 14 },
+            { header: "Weekly Off", key: "wo", width: 12 },
+            { header: "Holiday", key: "holiday", width: 12 },
+            { header: "Total Paid Days", key: "paid", width: 16 },
+            { header: "Hours Worked", key: "hours", width: 16 },
+            { header: "Over Time", key: "ot", width: 14 }
+        ];
+
+        const headerRow = worksheet.getRow(1);
+        headerRow.height = 28;
+        headerRow.eachCell(cell => {
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        });
+
+        records.forEach((r, idx) => {
+            const row = worksheet.addRow({
+                sr: idx + 1,
+                code: r.code,
+                name: r.name,
+                present: r.presentDays,
+                absent: r.absentDays,
+                wo: r.weeklyOff,
+                holiday: r.holiday,
+                paid: r.paidDays,
+                hours: r.hoursWorked,
+                ot: r.overtimeHours
+            });
+            row.height = 20;
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${sheetTitle}.xlsx`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        showToast("Biometric Excel Summary downloaded!");
+    } catch (err) {
+        console.error("Export error:", err);
+        showToast("Error generating Biometric Excel!", "error");
+    }
+}
+
+// -------------------------------------------------------------
+// GENERAL UTILITIES & EXPORTS
+// -------------------------------------------------------------
+function openEmployeeModal() {
+    document.getElementById('employee-form')?.reset();
+    const idField = document.getElementById('form-emp-id');
+    if (idField) idField.value = '';
+
+    // Show all sections when adding a brand new employee
+    document.getElementById('modal-sec-identity')?.classList.remove('hidden');
+    document.getElementById('modal-sec-statutory')?.classList.remove('hidden');
+    document.getElementById('modal-sec-salary')?.classList.remove('hidden');
+    document.getElementById('modal-sec-bank')?.classList.remove('hidden');
+
+    const badge = document.getElementById('modal-emp-info-badge');
+    if (badge) badge.classList.add('hidden');
+
+    const titleEl = document.getElementById('modal-emp-title');
+    if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-user-plus text-indigo-600"></i> Add Employee Master Record';
+
+    document.getElementById('employee-modal')?.classList.remove('hidden');
+}
+
+function editEmployee(empId, tabType = 'emp') {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp) return;
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    };
+
+    setVal('form-emp-id', emp.id);
+    setVal('form-emp-code', (emp.code || '').toUpperCase());
+    setVal('form-emp-payroll-code', (emp.payrollCode || '').toUpperCase());
+    setVal('form-emp-status', (emp.status || 'ACTIVE').toUpperCase());
+    setVal('form-emp-name', (emp.name || '').toUpperCase());
+    setVal('form-emp-father', (emp.fatherOrHusbandName || '').toUpperCase());
+    setVal('form-emp-desig', (emp.designation || '').toUpperCase());
+    setVal('form-emp-dept', (emp.dept || 'OPERATIONS').toUpperCase());
+    setVal('form-emp-dob', toInputDateFormat(emp.dob));
+    setVal('form-emp-doj', toInputDateFormat(emp.doj));
+    setVal('form-emp-dol', toInputDateFormat(emp.dol));
+    setVal('form-emp-last-increment', (emp.lastIncrement || '').toUpperCase());
+    setVal('form-emp-uan', (emp.uan || '').toUpperCase());
+    setVal('form-emp-epf', (emp.epfMemberId || '').toUpperCase());
+    setVal('form-emp-esic', (emp.esicIpNumber || '').toUpperCase());
+    setVal('form-emp-basic', emp.basicRate || 0);
+    setVal('form-emp-allowance', emp.splAllowance || 0);
+    setVal('form-emp-city-allow', emp.cityAllow || 0);
+    setVal('form-emp-transfer-mode', (emp.modeOfTransfer || 'BANK TRANSFER').toUpperCase());
+    setVal('form-emp-bank', (emp.bank || '').toUpperCase());
+    setVal('form-emp-acc', (emp.acc || '').toUpperCase());
+    setVal('form-emp-ifsc', (emp.ifsc || '').toUpperCase());
+
+    const titleEl = document.getElementById('modal-emp-title');
+    const badge = document.getElementById('modal-emp-info-badge');
+
+    const secIdentity = document.getElementById('modal-sec-identity');
+    const secStatutory = document.getElementById('modal-sec-statutory');
+    const secSalary = document.getElementById('modal-sec-salary');
+    const secBank = document.getElementById('modal-sec-bank');
+
+    // Contextual Section Visibility according to active sub-tab
+    if (tabType === 'salary') {
+        if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-calculator text-emerald-600"></i> Edit Salary Structure';
+        if (badge) {
+            badge.innerText = `Employee: ${String(emp.name || '').toUpperCase()} (${String(emp.code || '').toUpperCase()})`;
+            badge.classList.remove('hidden');
+        }
+        secIdentity?.classList.add('hidden');
+        secStatutory?.classList.add('hidden');
+        secSalary?.classList.remove('hidden');
+        secBank?.classList.add('hidden');
+
+    } else if (tabType === 'bank') {
+        if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-building-columns text-sky-600"></i> Edit Bank Details';
+        if (badge) {
+            badge.innerText = `Employee: ${String(emp.name || '').toUpperCase()} (${String(emp.code || '').toUpperCase()})`;
+            badge.classList.remove('hidden');
+        }
+        secIdentity?.classList.add('hidden');
+        secStatutory?.classList.add('hidden');
+        secSalary?.classList.add('hidden');
+        secBank?.classList.remove('hidden');
+
+    } else {
+        if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-user-pen text-indigo-600"></i> Edit Employee Master Record';
+        if (badge) badge.classList.add('hidden');
+
+        secIdentity?.classList.remove('hidden');
+        secStatutory?.classList.remove('hidden');
+        secSalary?.classList.add('hidden');
+        secBank?.classList.add('hidden');
+    }
+
+    document.getElementById('employee-modal')?.classList.remove('hidden');
+}
+
+function closeEmployeeModal() {
+    document.getElementById('employee-modal')?.classList.add('hidden');
+}
+
+async function handleEmployeeSubmit(e) {
+    e.preventDefault();
+    const empId = document.getElementById('form-emp-id')?.value.trim() || `EMP-${Date.now()}`;
+    const existingEmp = employees.find(emp => emp.id === empId) || {};
+
+    const getVal = (id, fallback) => {
+        const el = document.getElementById(id);
+        if (!el || el.closest('.hidden')) return fallback;
+        return el.value !== undefined ? el.value : fallback;
+    };
+
+    const payload = {
+        id: empId,
+        code: String(getVal('form-emp-code', existingEmp.code || '') || getVal('form-emp-payroll-code', existingEmp.payrollCode || '')).trim().toUpperCase(),
+        payrollCode: String(getVal('form-emp-payroll-code', existingEmp.payrollCode || '')).trim().toUpperCase(),
+        status: String(getVal('form-emp-status', existingEmp.status || 'ACTIVE')).toUpperCase(),
+        name: String(getVal('form-emp-name', existingEmp.name || '')).trim().toUpperCase(),
+        fatherOrHusbandName: String(getVal('form-emp-father', existingEmp.fatherOrHusbandName || '')).trim().toUpperCase(),
+        designation: String(getVal('form-emp-desig', existingEmp.designation || '')).trim().toUpperCase(),
+        dept: String(getVal('form-emp-dept', existingEmp.dept || 'OPERATIONS')).trim().toUpperCase(),
+        dob: formatDateToDDMMMYYYY(getVal('form-emp-dob', existingEmp.dob || '')),
+        doj: formatDateToDDMMMYYYY(getVal('form-emp-doj', existingEmp.doj || '')),
+        dol: formatDateToDDMMMYYYY(getVal('form-emp-dol', existingEmp.dol || '')),
+        lastIncrement: String(getVal('form-emp-last-increment', existingEmp.lastIncrement || '')).trim().toUpperCase(),
+        uan: String(getVal('form-emp-uan', existingEmp.uan || '')).trim().toUpperCase(),
+        epfMemberId: String(getVal('form-emp-epf', existingEmp.epfMemberId || '')).trim().toUpperCase(),
+        esicIpNumber: String(getVal('form-emp-esic', existingEmp.esicIpNumber || '')).trim().toUpperCase(),
+        basicRate: parseFloat(getVal('form-emp-basic', existingEmp.basicRate || 0)) || 0,
+        splAllowance: parseFloat(getVal('form-emp-allowance', existingEmp.splAllowance || 0)) || 0,
+        cityAllow: parseFloat(getVal('form-emp-city-allow', existingEmp.cityAllow || 0)) || 0,
+        modeOfTransfer: String(getVal('form-emp-transfer-mode', existingEmp.modeOfTransfer || 'BANK TRANSFER')).toUpperCase(),
+        bank: String(getVal('form-emp-bank', existingEmp.bank || '')).trim().toUpperCase(),
+        acc: String(getVal('form-emp-acc', existingEmp.acc || '')).trim().toUpperCase(),
+        ifsc: String(getVal('form-emp-ifsc', existingEmp.ifsc || '')).trim().toUpperCase()
+    };
+
+    if (!payload.code || !payload.name) {
+        showToast('Employee Code aur Employee Name required hain.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/employee', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok || result.status === 'error') {
+            showToast(result.message || `Employee save nahi hua (HTTP ${res.status}).`, 'error');
+            return;
+        }
+
+        showToast('Employee record successfully saved!');
+        closeEmployeeModal();
+        const masterSearch = document.getElementById('master-search');
+        if (masterSearch) masterSearch.value = '';
+        currentMasterSubTab = 'emp';
+        await fetchServerData();
+        switchTab('master');
+        switchMasterSubTab('emp');
+    } catch (err) {
+        console.error('Employee save error:', err);
+        showToast(`Employee save nahi hua: ${err.message || 'Server connection error.'}`, 'error');
+    }
+}
+
+async function deleteEmployee(id) {
+    if (!confirm('Are you sure you want to remove this employee?')) return;
+    const res = await fetch(`/api/employee/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+        showToast('Employee deleted.');
+        await fetchServerData();
+    }
+}
+
+async function saveRulesConfig() {
+    payrollConfig.companyName = document.getElementById('rule-company-name')?.value.trim() || payrollConfig.companyName;
+    payrollConfig.companyAddr = document.getElementById('rule-company-addr')?.value.trim() || payrollConfig.companyAddr;
+    payrollConfig.pfRate = parseFloat(document.getElementById('rule-pf-rate')?.value) || 0;
+    payrollConfig.esicRate = parseFloat(document.getElementById('rule-esic-rate')?.value) || 0;
+    payrollConfig.hraRate = parseFloat(document.getElementById('rule-hra-rate')?.value) || 0;
+    payrollConfig.ptAmount = parseFloat(document.getElementById('rule-pt-amount')?.value) || 0;
+
+    await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payrollConfig)
+    });
+
+    const portalName = document.getElementById('portal-company-name');
+    if (portalName) portalName.innerText = payrollConfig.companyName;
+    showToast('Rules saved to Central Database!');
+    renderSalarySheet();
+    renderSalarySheetCalc();
+}
+
+function populateRulesForm() {
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    };
+    setVal('rule-company-name', payrollConfig.companyName);
+    setVal('rule-company-addr', payrollConfig.companyAddr);
+    setVal('rule-pf-rate', payrollConfig.pfRate);
+    setVal('rule-esic-rate', payrollConfig.esicRate);
+    setVal('rule-hra-rate', payrollConfig.hraRate);
+    setVal('rule-pt-amount', payrollConfig.ptAmount);
+
+    const portalName = document.getElementById('portal-company-name');
+    if (portalName) portalName.innerText = payrollConfig.companyName;
+}
+
+function updateDashboardAnalytics() {
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+    let totalGross = 0, totalDeduct = 0, totalNet = 0;
+    let totalPF = 0, totalESIC = 0, totalAdv = 0;
+    const labels = [], grossData = [], netData = [];
+
+    employees.forEach(emp => {
+        const recKey = `${period.year}-${period.monthNum}-${emp.id}`;
+        const rec = monthlyPayrollRecords[recKey] || null;
+        const actualPaidDays = isMgr ? workingDays : (rec ? rec.paidDays : workingDays);
+        const res = calculateEmpPayroll(emp, workingDays, actualPaidDays, isMgr ? { ...rec, deductShortTime: 0, penaltyLate: 0 } : rec);
+
+        totalGross += res.totalPayable;
+        totalDeduct += res.totalDeductions;
+        totalNet += res.netSalary;
+        totalPF += res.pf;
+        totalESIC += res.esic;
+        totalAdv += res.advance;
+
+        labels.push(emp.name.split(' ')[0]);
+        grossData.push(res.totalPayable);
+        netData.push(res.netSalary);
+    });
+
+    const setElText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.innerText = val;
+    };
+
+    setElText('dash-emp-count', employees.length);
+    setElText('dash-gross-salary', `₹${totalGross.toLocaleString('en-IN')}`);
+    setElText('dash-total-deductions', `₹${totalDeduct.toLocaleString('en-IN')}`);
+    setElText('dash-net-payable', `₹${totalNet.toLocaleString('en-IN')}`);
+
+    const ctxBar = document.getElementById('payrollBarChart')?.getContext('2d');
+    if (ctxBar) {
+        if (barChartInstance) barChartInstance.destroy();
+        barChartInstance = new Chart(ctxBar, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'Payable Amount (₹)', data: grossData, backgroundColor: '#10b981', borderRadius: 6 },
+                    { label: 'Net Disbursed (₹)', data: netData, backgroundColor: '#0284c7', borderRadius: 6 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    const ctxPie = document.getElementById('deductionsPieChart')?.getContext('2d');
+    if (ctxPie) {
+        if (pieChartInstance) pieChartInstance.destroy();
+        pieChartInstance = new Chart(ctxPie, {
+            type: 'doughnut',
+            data: {
+                labels: ['P.F.', 'E.S.I.C', 'Advance'],
+                datasets: [{ data: [totalPF, totalESIC, totalAdv], backgroundColor: ['#f43f5e', '#fb923c', '#64748b'] }]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+}
+
+function showToast(msg, type = 'success') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `p-4 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transition-all duration-300 pointer-events-auto ${type === 'success' ? 'bg-slate-900 text-white border-l-4 border-emerald-500' : 'bg-rose-900 text-white border-l-4 border-rose-500'}`;
+    toast.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-circle-check text-emerald-400' : 'fa-circle-exclamation text-rose-400'} text-lg"></i><span>${msg}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-x-full');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// STRICT RULE: Selected Period strictly aligns with active biometric recorded months
+function getSelectedPeriod() {
+    const monthSelect = document.getElementById('global-month-select');
+    const yearSelect = document.getElementById('global-year-select');
+
+    let m = parseInt(monthSelect?.value) || 8;
+    let y = parseInt(yearSelect?.value) || 2026;
+
+    if (biometricMonths.length > 0) {
+        const found = biometricMonths.find(bm => bm.month === m && bm.year === y);
+        if (!found) {
+            m = biometricMonths[0].month;
+            y = biometricMonths[0].year;
+        }
+    }
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const safeMonthIndex = (m >= 1 && m <= 12) ? m - 1 : 7;
+    const totalDays = new Date(y, safeMonthIndex + 1, 0).getDate();
+    return { monthNum: safeMonthIndex + 1, monthName: monthNames[safeMonthIndex], year: y, daysInMonth: totalDays };
+}
+
+function onPeriodChange() {
+    const period = getSelectedPeriod();
+    const targetKey = `${period.year}-${period.monthNum}`;
+    if (biometricMonths.some(bm => bm.monthKey === targetKey)) {
+        currentBiometricMonthKey = targetKey;
+    }
+    renderSalarySheet();
+    renderSalarySheetCalc();
+    renderMasterTable();
+    renderSalaryDataTable();
+    renderBiometricModule();
+    if (currentTab === 'dashboard') updateDashboardAnalytics();
+}
+
+// -------------------------------------------------------------
+// EXCEL EXPORT (EXACT MULTI-TIER LAYOUT MATCHING IMAGE)
+// -------------------------------------------------------------
+async function exportToExcel() {
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+
+    try {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = "Payroll Enterprise";
+        const worksheet = workbook.addWorksheet(`Salary_${period.monthName}_${period.year}`.slice(0, 31), { views: [{ showGridLines: true }] });
+
+        worksheet.mergeCells('A1:Y1');
+        const titleCell = worksheet.getCell('A1');
+        titleCell.value = `${payrollConfig.companyName.toUpperCase()} - FINAL SALARY SHEET FOR ${period.monthName.toUpperCase()} ${period.year}`;
+        titleCell.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+        titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+        titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+        worksheet.getRow(1).height = 30;
+
+        worksheet.mergeCells('A2:A3'); worksheet.getCell('A2').value = "Sr. No.";
+        worksheet.mergeCells('B2:B3'); worksheet.getCell('B2').value = "Emp Code";
+        worksheet.mergeCells('C2:C3'); worksheet.getCell('C2').value = "Name of employee";
+        worksheet.mergeCells('D2:D3'); worksheet.getCell('D2').value = "ESIC IP NUMBER";
+        worksheet.mergeCells('E2:E3'); worksheet.getCell('E2').value = "EPF UAN";
+
+        worksheet.mergeCells('F2:J2'); worksheet.getCell('F2').value = "Gross Amounts of wages";
+        worksheet.getCell('F3').value = "Basic +DA";
+        worksheet.getCell('G3').value = "HRA";
+        worksheet.getCell('H3').value = "Special Allow";
+        worksheet.getCell('I3').value = "City Allow";
+        worksheet.getCell('J3').value = "Total";
+
+        worksheet.mergeCells('K2:K3'); worksheet.getCell('K2').value = "No. of days worked done";
+
+        worksheet.mergeCells('L2:P2'); worksheet.getCell('L2').value = "Amount Earned";
+        worksheet.getCell('L3').value = "Basic +DA";
+        worksheet.getCell('M3').value = "HRA";
+        worksheet.getCell('N3').value = "Special Allow";
+        worksheet.getCell('O3').value = "City Allow";
+        worksheet.getCell('P3').value = "Total";
+
+        worksheet.mergeCells('Q2:Q3'); worksheet.getCell('Q2').value = "Deduction For Short Time";
+        worksheet.mergeCells('R2:R3'); worksheet.getCell('R2').value = "Overtime / Arrear";
+        worksheet.mergeCells('S2:S3'); worksheet.getCell('S2').value = "Penalty For Uniform & Late Entry";
+        worksheet.mergeCells('T2:T3'); worksheet.getCell('T2').value = "Total Payable";
+
+        worksheet.mergeCells('U2:W2'); worksheet.getCell('U2').value = "Deduction, if any";
+        worksheet.getCell('U3').value = "Advance";
+        worksheet.getCell('V3').value = "PF";
+        worksheet.getCell('W3').value = "ESI";
+
+        worksheet.mergeCells('X2:X3'); worksheet.getCell('X2').value = "Net amount paid";
+        worksheet.mergeCells('Y2:Y3'); worksheet.getCell('Y2').value = "Signature/ thumb impression of workman";
+
+        [2, 3].forEach(rowNum => {
+            const row = worksheet.getRow(rowNum);
+            row.height = 24;
+            row.eachCell({ includeEmpty: true }, (cell) => {
+                cell.font = { name: 'Segoe UI', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+                cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FF475569' } },
+                    bottom: { style: 'thin', color: { argb: 'FF475569' } },
+                    left: { style: 'thin', color: { argb: 'FF475569' } },
+                    right: { style: 'thin', color: { argb: 'FF475569' } }
+                };
+            });
+        });
+
+        const colWidths = [8, 12, 28, 16, 16, 12, 10, 14, 12, 14, 12, 12, 10, 14, 12, 14, 15, 14, 16, 15, 12, 10, 10, 16, 22];
+        colWidths.forEach((w, idx) => { worksheet.getColumn(idx + 1).width = w; });
+
+        employees.forEach((emp, index) => {
+            const recKey = `${period.year}-${period.monthNum}-${emp.id}`;
+            const rec = monthlyPayrollRecords[recKey] || null;
+            const res = calculateEmpPayroll(emp, workingDays, (rec ? rec.paidDays : workingDays), rec);
+
+            const rowData = [
+                index + 1, emp.code, emp.name, emp.esicIpNumber || "", emp.uan || "",
+                res.baseBasic, res.baseHra, res.baseSpl, res.baseCity, res.baseTotalGross,
+                (rec ? rec.paidDays : workingDays),
+                res.earnedBasic, res.earnedHra, res.earnedSpl, res.earnedCity, res.earnedTotal,
+                res.deductShortTime, res.overtimeArrear, res.penaltyLate, res.totalPayable,
+                res.advance, res.pf, res.esic, res.netSalary, ""
+            ];
+
+            const addedRow = worksheet.addRow(rowData);
+            addedRow.height = 20;
+
+            addedRow.eachCell((cell, colNum) => {
+                cell.font = { name: 'Segoe UI', size: 9, color: { argb: 'FF1E293B' } };
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                    right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+                };
+
+                if (colNum === 1 || colNum === 2 || colNum === 4 || colNum === 5 || colNum === 11) {
+                    cell.alignment = { vertical: 'middle', horizontal: 'center' };
+                } else if (colNum === 3) {
+                    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+                } else {
+                    cell.alignment = { vertical: 'middle', horizontal: 'right' };
+                    cell.numFmt = '#,##0';
+                }
+            });
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Final_Salary_Sheet_${period.monthName}_${period.year}.xlsx`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+
+        showToast(`Excel Register Downloaded: ${period.monthName} ${period.year}`);
+    } catch (err) {
+        console.error("Excel generation error:", err);
+        showToast("Error exporting Salary Sheet to Excel!", "error");
+    }
+}
+
+function openPayslipModal(empId) {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp) return;
+    const period = getSelectedPeriod();
+    const workingDays = period.daysInMonth;
+    const recKey = `${period.year}-${period.monthNum}-${emp.id}`;
+    const rec = monthlyPayrollRecords[recKey] || null;
+    const res = calculateEmpPayroll(emp, workingDays, (rec ? rec.paidDays : workingDays), rec);
+
+    const container = document.getElementById('printable-payslip-content');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="border-b pb-4 flex justify-between">
+            <div>
+                <h1 class="text-xl font-black uppercase text-slate-900">${payrollConfig.companyName}</h1>
+                <p class="text-xs text-slate-500">${payrollConfig.companyAddr}</p>
+            </div>
+            <div class="text-right">
+                <span class="bg-brand-50 text-brand-700 px-3 py-1 rounded text-xs font-bold uppercase">PAYSLIP</span>
+                <p class="text-xs font-bold text-slate-700 mt-1">${period.monthName.toUpperCase()} ${period.year}</p>
+            </div>
+        </div>
+        <div class="bg-slate-50 p-3 rounded-xl border grid grid-cols-2 text-xs my-4">
+            <div>
+                <p class="text-slate-500">Employee Name: <strong class="text-slate-900">${emp.name}</strong></p>
+                <p class="text-slate-500 mt-1">Designation: <strong class="text-slate-800">${emp.designation}</strong></p>
+                <p class="text-slate-500 mt-1">Father/Husband: <strong class="text-slate-800">${emp.fatherOrHusbandName || '-'}</strong></p>
+            </div>
+            <div class="text-right">
+                <p class="text-slate-500">Emp Code: <strong class="text-slate-900">${emp.code}</strong></p>
+                <p class="text-slate-500 mt-1">UAN: <strong class="text-slate-800 font-mono">${emp.uan || '-'}</strong></p>
+                <p class="text-slate-500 mt-1">ESIC: <strong class="text-slate-800 font-mono">${emp.esicIpNumber || '-'}</strong></p>
+                <p class="text-slate-500 mt-1">Worked Days / Month: <strong class="text-slate-900">${rec ? rec.paidDays : workingDays} / ${workingDays}</strong></p>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4 border rounded-xl overflow-hidden mb-4 text-xs">
+            <div class="p-3 border-r space-y-1">
+                <p class="font-bold border-b pb-1 text-slate-800 uppercase">Amount Earned</p>
+                <div class="flex justify-between"><span>Basic +DA:</span><strong>₹${res.earnedBasic.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>HRA:</span><strong>₹${res.earnedHra.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>Special Allow.:</span><strong>₹${res.earnedSpl.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>City Allow.:</span><strong>₹${res.earnedCity.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>Overtime / Arrear:</span><strong>₹${res.overtimeArrear.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between font-bold text-teal-700 pt-1 border-t"><span>Total Payable:</span><span>₹${res.totalPayable.toLocaleString('en-IN')}</span></div>
+            </div>
+            <div class="p-3 space-y-1">
+                <p class="font-bold border-b pb-1 text-slate-800 uppercase">Deductions</p>
+                <div class="flex justify-between"><span>P.F.:</span><strong class="text-rose-600">₹${res.pf.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>E.S.I.:</span><strong class="text-rose-600">₹${res.esic.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>Short Time:</span><strong class="text-rose-600">₹${res.deductShortTime.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>Penalty:</span><strong class="text-rose-600">₹${res.penaltyLate.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between"><span>Advance:</span><strong class="text-rose-600">₹${res.advance.toLocaleString('en-IN')}</strong></div>
+                <div class="flex justify-between font-bold text-rose-700 pt-1 border-t"><span>Total Deductions:</span><span>₹${res.totalDeductions.toLocaleString('en-IN')}</span></div>
+            </div>
+        </div>
+        <div class="bg-brand-600 text-white p-3 rounded-xl flex justify-between items-center font-bold">
+            <span>NET AMOUNT PAID:</span>
+            <span class="text-xl">₹${res.netSalary.toLocaleString('en-IN')}</span>
+        </div>`;
+    document.getElementById('payslip-modal')?.classList.remove('hidden');
+}
+
+function closePayslipModal() {
+    document.getElementById('payslip-modal')?.classList.add('hidden');
+}
+
+
+
+function getVisibleMasterEmployeesForSelection() {
+    if (currentMasterSubTab === 'salary2' || (currentMasterSubTab === 'emp' && employeeMasterViewMode === 'pending')) return [];
+    const query = (document.getElementById('master-search')?.value || '').trim().toLowerCase();
+    if (currentMasterSubTab === 'salary') {
+        return salaryMaster.filter(row => !query || [row.empCode, row.payrollCode, row.name].some(v => String(v || '').toLowerCase().includes(query)))
+            .map(row => ({ id: String(row.employeeId), name: row.name, code: row.empCode }));
+    }
+    return employees.filter(emp => {
+        if (!query) return true;
+        const name = String(emp.name || '').toLowerCase();
+        const code = String(emp.code || '').toLowerCase();
+        const father = String(emp.fatherOrHusbandName || '').toLowerCase();
+        return name.includes(query) || code.includes(query) || (currentMasterSubTab === 'emp' && father.includes(query));
+    });
+}
+
+function getVisibleSalaryMaster2RowsForSelection() {
+    const query = (document.getElementById('master-search')?.value || '').trim().toLowerCase();
+    return salaryMaster2.filter(row => {
+        if (!query) return true;
+        return [row.sNo, row.orgEmpCode, row.payrollEmpCode, row.employeeName, row.designation, row.remarksStatus]
+            .some(value => String(value ?? '').toLowerCase().includes(query));
+    });
+}
+
+function syncSelectAllCheckbox() {
+    const selectAllCb = document.getElementById('master-select-all-cb');
+    if (!selectAllCb) return;
+    if (currentMasterSubTab === 'salary2') {
+        const visibleRows = getVisibleSalaryMaster2RowsForSelection();
+        selectAllCb.checked = visibleRows.length > 0 && visibleRows.every(row => selectedSalaryMaster2Ids.has(Number(row.sNo)));
+        selectAllCb.indeterminate = visibleRows.some(row => selectedSalaryMaster2Ids.has(Number(row.sNo))) && !selectAllCb.checked;
+        return;
+    }
+    const visibleEmployees = getVisibleMasterEmployeesForSelection();
+    selectAllCb.checked = visibleEmployees.length > 0 && visibleEmployees.every(emp => selectedEmployeeIds.has(emp.id));
+    selectAllCb.indeterminate = visibleEmployees.some(emp => selectedEmployeeIds.has(emp.id)) && !selectAllCb.checked;
+}
+
+function toggleSelectAllEmployees(isChecked) {
+    const visibleEmployees = getVisibleMasterEmployeesForSelection();
+    visibleEmployees.forEach(emp => {
+        if (isChecked) selectedEmployeeIds.add(emp.id);
+        else selectedEmployeeIds.delete(emp.id);
+    });
+    updateBulkDeleteBtnState();
+    renderMasterTable();
+    syncSelectAllCheckbox();
+}
+
+function toggleEmployeeSelection(empId, isChecked) {
+    if (isChecked) selectedEmployeeIds.add(empId);
+    else selectedEmployeeIds.delete(empId);
+    updateBulkDeleteBtnState();
+    syncSelectAllCheckbox();
+}
+
+function toggleSelectAllSalaryMaster2(isChecked) {
+    getVisibleSalaryMaster2RowsForSelection().forEach(row => {
+        const id = Number(row.sNo);
+        if (isChecked) selectedSalaryMaster2Ids.add(id);
+        else selectedSalaryMaster2Ids.delete(id);
+    });
+    renderMasterTable();
+    syncSelectAllCheckbox();
+    updateBulkDeleteBtnState();
+}
+
+function toggleSalaryMaster2Selection(sNo, isChecked) {
+    const id = Number(sNo);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (isChecked) selectedSalaryMaster2Ids.add(id);
+    else selectedSalaryMaster2Ids.delete(id);
+    syncSelectAllCheckbox();
+    updateBulkDeleteBtnState();
+}
+
+function updateBulkDeleteBtnState() {
+    const btn = document.getElementById('btn-master-bulk-delete');
+    const bulkSalaryEditBtn = document.getElementById('btn-salary-bulk-edit');
+    const countSpan = document.getElementById('master-selected-count');
+    const label = document.getElementById('master-selected-label');
+    const isSalary2 = currentMasterSubTab === 'salary2';
+    const isPendingView = currentMasterSubTab === 'emp' && employeeMasterViewMode === 'pending';
+    const isEmployeeTab = ['emp', 'salary', 'bank'].includes(currentMasterSubTab) && !isPendingView;
+    const count = isSalary2 ? selectedSalaryMaster2Ids.size : selectedEmployeeIds.size;
+    if (countSpan) countSpan.innerText = count;
+    if (label) label.textContent = isSalary2 ? 'Delete Selected Salary Master 2' : (currentMasterSubTab === 'salary' ? 'Delete Selected Salary Master' : 'Delete Selected Employees');
+    if (bulkSalaryEditBtn) {
+        if (currentMasterSubTab === 'salary' && selectedEmployeeIds.size > 0) bulkSalaryEditBtn.classList.remove('hidden');
+        else bulkSalaryEditBtn.classList.add('hidden');
+    }
+    if (btn) {
+        if (count > 0 && (isSalary2 || isEmployeeTab)) btn.classList.remove('hidden');
+        else btn.classList.add('hidden');
+        btn.title = isSalary2
+            ? 'Delete selected Salary Master 2 rows only; Employee Master and payroll history stay unchanged.'
+            : (currentMasterSubTab === 'salary'
+                ? 'Delete selected Salary Master rows only; Employee Master and payroll history stay unchanged.'
+                : 'Delete selected employees and their linked payroll records.');
+    }
+}
+
+function openSalaryMasterEditModal(employeeId) {
+    const row = salaryMaster.find(item => String(item.employeeId) === String(employeeId));
+    if (!row) { showToast('Salary Master record not found.', 'error'); return; }
+    document.getElementById('salary-edit-employee-id').value = row.employeeId;
+    document.getElementById('salary-edit-employee-label').textContent = `${row.empCode || ''} · ${row.name || ''}`;
+    document.getElementById('salary-edit-basic').value = Number(row.basicRate) || 0;
+    document.getElementById('salary-edit-spl').value = Number(row.splAllowance) || 0;
+    document.getElementById('salary-edit-city').value = Number(row.cityAllow) || 0;
+    document.getElementById('salary-edit-modal')?.classList.remove('hidden');
+}
+function closeSalaryMasterEditModal() { document.getElementById('salary-edit-modal')?.classList.add('hidden'); }
+async function submitSalaryMasterEdit(event) {
+    event.preventDefault();
+    const employeeId = document.getElementById('salary-edit-employee-id')?.value || '';
+    const payload = { basicRate: Number(document.getElementById('salary-edit-basic')?.value || 0), splAllowance: Number(document.getElementById('salary-edit-spl')?.value || 0), cityAllow: Number(document.getElementById('salary-edit-city')?.value || 0) };
+    if (Object.values(payload).some(value => !Number.isFinite(value) || value < 0)) { showToast('Please enter valid non-negative salary values.', 'error'); return; }
+    const submit = document.getElementById('salary-edit-submit');
+    if (submit) { submit.disabled = true; submit.textContent = 'Saving...'; }
+    try {
+        const response = await fetch(`/api/salary-master/${encodeURIComponent(employeeId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.status !== 'success') throw new Error(result.message || `Save failed (HTTP ${response.status})`);
+        closeSalaryMasterEditModal(); await fetchServerData(); showToast('Salary Master updated. Employee Master data remains unchanged.');
+    } catch (err) { console.error('Salary Master edit failed:', err); showToast(err.message || 'Unable to update Salary Master.', 'error'); }
+    finally { if (submit) { submit.disabled = false; submit.textContent = 'Save Salary'; } }
+}
+function openBulkSalaryEditModal() {
+    if (!selectedEmployeeIds.size) { showToast('Select at least one Salary Master employee.', 'error'); return; }
+    document.getElementById('salary-bulk-selected-count').textContent = `${selectedEmployeeIds.size} selected employee(s)`;
+    document.getElementById('salary-bulk-mode').value = 'set';
+    ['basic','spl','city'].forEach(k => { const el = document.getElementById(`salary-bulk-${k}`); if (el) el.value = ''; });
+    document.getElementById('salary-bulk-edit-modal')?.classList.remove('hidden');
+}
+function closeBulkSalaryEditModal() { document.getElementById('salary-bulk-edit-modal')?.classList.add('hidden'); }
+async function submitBulkSalaryEdit(event) {
+    event.preventDefault();
+    const employeeIds = Array.from(selectedEmployeeIds);
+    if (!employeeIds.length) { showToast('Select at least one Salary Master employee.', 'error'); return; }
+    const toNum = id => { const v = document.getElementById(id)?.value; return v === undefined || String(v).trim() === '' ? null : Number(v); };
+    const payload = { employeeIds, mode: document.getElementById('salary-bulk-mode')?.value || 'set', basicRate: toNum('salary-bulk-basic'), splAllowance: toNum('salary-bulk-spl'), cityAllow: toNum('salary-bulk-city') };
+    if (!['basicRate','splAllowance','cityAllow'].some(k => payload[k] !== null)) { showToast('Enter at least one salary field to update.', 'error'); return; }
+    if (['basicRate','splAllowance','cityAllow'].some(k => payload[k] !== null && (!Number.isFinite(payload[k]) || payload[k] < 0))) { showToast('Enter valid non-negative amounts/adjustments.', 'error'); return; }
+    const submit = document.getElementById('salary-bulk-submit');
+    if (submit) { submit.disabled = true; submit.textContent = 'Updating...'; }
+    try {
+        const response = await fetch('/api/salary-master/bulk_update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.status !== 'success') throw new Error(result.message || `Bulk update failed (HTTP ${response.status})`);
+        closeBulkSalaryEditModal(); selectedEmployeeIds.clear(); await fetchServerData(); showToast(`${result.updatedCount || 0} salary row(s) updated. Employee Master data was not changed.`);
+    } catch (err) { console.error('Salary Master bulk update failed:', err); showToast(err.message || 'Unable to bulk update salary.', 'error'); }
+    finally { if (submit) { submit.disabled = false; submit.textContent = 'Apply Changes'; } }
+}
+
+async function bulkDeleteEmployees() {
+    if (currentMasterSubTab === 'salary') {
+        const employeeIds = Array.from(selectedEmployeeIds);
+        if (!employeeIds.length) return;
+        if (!confirm(`Delete ${employeeIds.length} selected Salary Master row(s) only? Employee Master and its records will remain unchanged.`)) return;
+        try {
+            const response = await fetch('/api/salary-master/bulk_delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ employeeIds }) });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status !== 'success') throw new Error(result.message || `Delete failed (HTTP ${response.status})`);
+            selectedEmployeeIds.clear(); await fetchServerData(); showToast(`${result.deletedCount || 0} Salary Master row(s) deleted. Employee Master is unchanged.`);
+        } catch (err) { console.error('Salary Master delete failed:', err); showToast(err.message || 'Unable to delete Salary Master rows.', 'error'); }
+        return;
+    }
+    if (currentMasterSubTab === 'salary2') {
+        const sNos = Array.from(selectedSalaryMaster2Ids);
+        if (!sNos.length) return;
+        const ok = confirm(`Delete ${sNos.length} selected Salary Master 2 record(s)? This removes them from Salary Master 2 and Pending Employees only. Employee Master and payroll history will not be deleted.`);
+        if (!ok) return;
+        try {
+            const response = await fetch('/api/salary-master2/bulk_delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sNos })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status !== 'success') throw new Error(result.message || `Delete failed (HTTP ${response.status})`);
+            selectedSalaryMaster2Ids.clear();
+            await fetchServerData();
+            showToast(`${result.deletedCount || 0} Salary Master 2 record(s) deleted.`);
+        } catch (err) {
+            console.error('Salary Master 2 bulk delete failed:', err);
+            showToast(err.message || 'Error deleting Salary Master 2 rows.', 'error');
+        }
+        return;
+    }
+
+    const ids = Array.from(selectedEmployeeIds);
+    if (!ids.length) return;
+    const sectionName = currentMasterSubTab === 'salary' ? 'Salary Master' : 'employees';
+    if (!confirm(`Delete ${ids.length} selected ${sectionName} record(s)? This will delete the employee records and linked payroll records. This action cannot be undone.`)) return;
+
+    showToast(`Deleting ${ids.length} selected ${sectionName} record(s)...`);
+    try {
+        const response = await fetch('/api/employees/bulk_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+        });
+        const res = await response.json().catch(() => ({}));
+        if (response.ok && res.status === 'success') {
+            showToast(`${res.deletedCount} employee record(s) deleted.`);
+            selectedEmployeeIds.clear();
+            updateBulkDeleteBtnState();
+            await fetchServerData();
+        } else {
+            showToast(res.message || 'Failed to delete selected records.', 'error');
+        }
+    } catch (err) {
+        console.error('Bulk employee delete failed:', err);
+        showToast('Error deleting selected records.', 'error');
+    }
+}
+
